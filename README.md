@@ -13,9 +13,9 @@ A local-first desktop workspace for Markdown, text, and code. Tauri 2 + SvelteKi
 
 ## Stack
 
-Tauri 2, Rust (`ignore`, `notify`, `serde_yaml`), Svelte 5 + SvelteKit, CodeMirror 6, markdown-it + DOMPurify, Hugeicons.
+Tauri 2, Rust, Svelte 5 + SvelteKit,
 
-UI conventions follow LavUIX and Impeccable: tight spacing, solid surfaces, one icon family, no decorative gradients or glass.
+UI conventions follow LavUIX 
 
 Design direction: LavUIX by lavenv0 (https://vspcoderz.tech).
 
