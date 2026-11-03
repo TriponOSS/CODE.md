@@ -20,7 +20,6 @@
     LibraryIcon,
     ListSettingIcon,
     ListTreeIcon,
-    Maximize01Icon,
     MinusIcon,
     Moon02Icon,
     Settings01Icon,
@@ -32,6 +31,8 @@
     SparklesIcon,
     TextIcon,
     Undo02Icon,
+    ExpandIcon,
+    ReloadIcon,
   } from "@hugeicons/core-free-icons";
 
   const icons = {
@@ -47,7 +48,7 @@
     chevron: ArrowRight01Icon,
     alert: Alert02Icon,
     check: CheckmarkCircle02Icon,
-    refresh: RefreshIcon,
+    refresh: ReloadIcon,
     library: LibraryIcon,
     panel: PanelRightIcon,
     sidebar: LayoutPanelLeftIcon,
@@ -61,7 +62,7 @@
     clock: ClockIcon,
     text: TextIcon,
     minus: MinusIcon,
-    maximize: Maximize01Icon,
+    maximize: ExpandIcon,
     settings: Settings01Icon,
     moon: Moon02Icon,
     sun: Sun01Icon,

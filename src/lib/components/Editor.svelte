@@ -190,4 +190,4 @@
   });
 </script>
 
-<div class="h-full overflow-hidden bg-editor [&_.cm-editor]:h-full {showLineNumbers ? '' : '[&_.cm-gutters]:hidden'}" bind:this={host}></div>
+<div class="h-full overflow-hidden rounded-xl bg-editor [&_.cm-editor]:h-full {showLineNumbers ? '' : '[&_.cm-gutters]:hidden'}" bind:this={host}></div>
