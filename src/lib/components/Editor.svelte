@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { basicSetup } from "codemirror";
+  import type { LanguageSupport } from "@codemirror/language";
   import { EditorView, keymap } from "@codemirror/view";
   import { Compartment, EditorState, Prec } from "@codemirror/state";
   import { markdown } from "@codemirror/lang-markdown";
@@ -31,6 +32,58 @@
   let host: HTMLDivElement;
   let view: EditorView | null = null;
   const wrapCompartment = new Compartment();
+  const languageCompartment = new Compartment();
+
+  async function loadLanguage(path: string): Promise<LanguageSupport | null> {
+    const name = path.split(/[\\/]/).pop() ?? path;
+    const extension = name.split(".").pop()?.toLowerCase() ?? "";
+    switch (extension) {
+      case "js":
+      case "mjs":
+      case "cjs":
+      case "jsx":
+        return (await import("@codemirror/lang-javascript")).javascript({
+          jsx: extension === "jsx",
+        });
+      case "ts":
+      case "mts":
+      case "cts":
+      case "tsx":
+        return (await import("@codemirror/lang-javascript")).javascript({
+          jsx: extension === "tsx",
+          typescript: true,
+        });
+      case "json":
+      case "jsonc":
+      case "json5":
+        return (await import("@codemirror/lang-json")).json();
+      case "html":
+      case "htm":
+      case "svelte":
+      case "vue":
+        return (await import("@codemirror/lang-html")).html();
+      case "css":
+      case "scss":
+      case "less":
+        return (await import("@codemirror/lang-css")).css();
+      case "py":
+      case "pyi":
+        return (await import("@codemirror/lang-python")).python();
+      case "rs":
+        return (await import("@codemirror/lang-rust")).rust();
+      case "yaml":
+      case "yml":
+        return (await import("@codemirror/lang-yaml")).yaml();
+      case "sql":
+        return (await import("@codemirror/lang-sql")).sql();
+      case "xml":
+      case "svg":
+      case "plist":
+        return (await import("@codemirror/lang-xml")).xml();
+      default:
+        return null;
+    }
+  }
 
   const theme = EditorView.theme(
     {
@@ -104,6 +157,23 @@
   );
 
   const highlight = HighlightStyle.define([
+    { tag: tags.keyword, color: "var(--accent-strong)", fontWeight: "600" },
+    { tag: tags.operatorKeyword, color: "var(--accent-strong)" },
+    { tag: tags.definitionKeyword, color: "var(--accent)" },
+    { tag: tags.function(tags.variableName), color: "var(--syntax-link)" },
+    { tag: tags.className, color: "var(--syntax-link)", fontWeight: "600" },
+    { tag: tags.typeName, color: "var(--syntax-link)" },
+    { tag: tags.propertyName, color: "var(--syntax-dim)" },
+    { tag: tags.string, color: "var(--ok)" },
+    { tag: tags.special(tags.string), color: "var(--syntax-link)" },
+    { tag: tags.number, color: "var(--accent-strong)" },
+    { tag: tags.bool, color: "var(--accent-strong)" },
+    { tag: tags.null, color: "var(--accent-strong)" },
+    { tag: tags.tagName, color: "var(--accent-strong)" },
+    { tag: tags.attributeName, color: "var(--syntax-link)" },
+    { tag: tags.operator, color: "var(--text-dim)" },
+    { tag: tags.punctuation, color: "var(--text-faint)" },
+    { tag: tags.comment, color: "var(--syntax-faint)", fontStyle: "italic" },
     { tag: tags.heading1, color: "var(--syntax-strong)", fontWeight: "700" },
     { tag: tags.heading2, color: "var(--syntax-strong)", fontWeight: "600" },
     { tag: tags.heading, color: "var(--syntax-dim)", fontWeight: "600" },
@@ -116,7 +186,6 @@
     { tag: tags.list, color: "var(--syntax-dim)" },
     { tag: tags.processingInstruction, color: "var(--syntax-faint)" },
     { tag: tags.meta, color: "var(--syntax-faint)" },
-    { tag: tags.comment, color: "var(--syntax-faint)" },
   ]);
 
   onMount(() => {
@@ -126,7 +195,7 @@
         doc: value,
         extensions: [
           basicSetup,
-          ...(isMarkdownPath(path) ? [markdown()] : []),
+          languageCompartment.of(isMarkdownPath(path) ? markdown() : []),
           theme,
           syntaxHighlighting(highlight),
           wrapCompartment.of(wordWrap ? EditorView.lineWrapping : []),
@@ -147,6 +216,19 @@
         ],
       }),
     });
+
+    const editor = view;
+    if (!isMarkdownPath(path)) {
+      void loadLanguage(path)
+        .then((support) => {
+          if (support && view === editor) {
+            editor.dispatch({
+              effects: languageCompartment.reconfigure(support),
+            });
+          }
+        })
+        .catch(() => undefined);
+    }
 
     if (revealLine > 0) scrollToLine(revealLine);
 

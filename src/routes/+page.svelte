@@ -8,6 +8,7 @@
     closeWorkspace,
     commitFiles,
     createEntry,
+    deleteEntry,
     getGitDiff,
     getGitLog,
     getGitStatus,
@@ -17,6 +18,7 @@
     pickWorkspace,
     pushGit,
     readFile,
+    renameEntry,
     saveFile,
     scanSkills,
     scanTree,
@@ -25,6 +27,7 @@
     workspaceRoot,
   } from "$lib/api";
   import { isMarkdownPath, isSkillPath } from "$lib/files";
+  import { canFormatDocument, formatDocument } from "$lib/format";
   import { ancestorsOf } from "$lib/tree";
   import { documentStats, extractOutline } from "$lib/outline";
   import {
@@ -198,6 +201,7 @@
   let paletteOpen = $state(false);
   let sidebarOpen = $state(true);
   let collapsed = $state(new Set<string>());
+  let selectedDirectory = $state<string | null>(null);
   let previewOn = $state(true);
   let previewRatio = $state(storedPreviewRatio());
   let resizingPreview = $state(false);
@@ -209,10 +213,14 @@
   let sidebarResizeStartX = 0;
   let sidebarResizeStartWidth = DEFAULT_SIDEBAR_WIDTH;
   let settings = $state<AppSettings>(loadSettings());
-  let createMenu = $state(false);
   let creating = $state<"file" | "folder" | null>(null);
+  let creatingParent = $state<string | null>(null);
   let newName = $state("");
   let creatingBusy = $state(false);
+  let formatting = $state(false);
+  let renameTarget = $state<{ path: string; isDir: boolean } | null>(null);
+  let renameName = $state("");
+  let renameBusy = $state(false);
   let revealKey = $state(0);
   let refreshing = $state(false);
   let notice = $state<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -223,7 +231,7 @@
     path: string | null;
     kind: "file" | "directory" | "tab" | "text" | "selection" | "default";
   } | null>(null);
-  let contextTarget: HTMLElement | null = null;
+  let contextTarget = $state<HTMLElement | null>(null);
   let contextRange: Range | null = null;
   let contextSelectedText = "";
   let git = $state<GitStatus | null>(null);
@@ -271,6 +279,13 @@
       keywords: "write disk",
       disabled: !dirty,
       run: () => void save(),
+    },
+    {
+      id: "format-document",
+      label: "Format Document",
+      keywords: "prettier format editor document code markdown",
+      disabled: !activeTab || !canFormatDocument(activeTab.path) || formatting,
+      run: () => void formatActiveDocument(),
     },
     {
       id: "toggle-preview",
@@ -632,6 +647,7 @@
     tabs = [];
     activePath = null;
     collapsed = new Set();
+    selectedDirectory = null;
     await refresh();
   }
 
@@ -656,35 +672,138 @@
     };
   }
 
-  function beginCreate(kind: "file" | "folder") {
+  function beginCreate(kind: "file" | "folder", parent = selectedDirectory) {
     if (!workspace) return;
-    createMenu = false;
     creating = kind;
+    creatingParent = parent;
     newName = kind === "file" ? "untitled.md" : "untitled";
+    if (parent) {
+      selectedDirectory = parent;
+      expandAncestors(parent);
+      collapsed = new Set([...collapsed].filter((path) => path !== parent));
+    }
   }
 
   function cancelCreate() {
     creating = null;
+    creatingParent = null;
     newName = "";
   }
 
-  async function submitCreate(event: SubmitEvent) {
-    event.preventDefault();
-    if (!workspace || !creating || creatingBusy) return;
-    const name = newName.trim();
+  async function submitCreate(
+    kind: "file" | "folder",
+    parent: string | null,
+    value: string,
+  ) {
+    if (!workspace || creating !== kind || creatingBusy) return;
+    const name = value.trim();
     if (name === "") return;
+    const pathName = parent && name !== parent && !name.startsWith(`${parent}/`)
+      ? `${parent}/${name}`
+      : name;
     creatingBusy = true;
     try {
-      const path = await createEntry(name, creating === "folder");
-      const kind = creating;
+      const path = await createEntry(pathName, kind === "folder");
       cancelCreate();
       await refresh();
       if (kind === "file") await openFile(path);
+      else selectedDirectory = path;
       say("ok", `${kind === "folder" ? "Folder" : "File"} created`);
     } catch (cause) {
       say("err", errorText(cause));
     } finally {
       creatingBusy = false;
+    }
+  }
+
+  function beginRename(path: string) {
+    const entry = tree.find((item) => item.path === path);
+    if (!workspace || !entry || renameBusy) return;
+    renameTarget = { path, isDir: entry.isDir };
+    renameName = entry.name;
+    contextMenu = null;
+  }
+
+  function cancelRename() {
+    if (renameBusy) return;
+    renameTarget = null;
+    renameName = "";
+  }
+
+  function remapPath(path: string, oldPath: string, newPath: string): string {
+    if (path === oldPath) return newPath;
+    return path.startsWith(`${oldPath}/`)
+      ? `${newPath}${path.slice(oldPath.length)}`
+      : path;
+  }
+
+  async function submitRename(path: string, value: string) {
+    const target = renameTarget;
+    const name = value.trim();
+    if (!target || target.path !== path || !workspace || !name || renameBusy) return;
+    renameBusy = true;
+    try {
+      const newPath = await renameEntry(target.path, name);
+      tabs = tabs.map((tab) => {
+        const path = remapPath(tab.path, target.path, newPath);
+        return path === tab.path
+          ? tab
+          : { ...tab, path, name: path.split("/").pop() ?? path };
+      });
+      if (activePath) activePath = remapPath(activePath, target.path, newPath);
+      if (selectedDirectory) {
+        selectedDirectory = remapPath(selectedDirectory, target.path, newPath);
+      }
+      collapsed = new Set(
+        [...collapsed].map((path) => remapPath(path, target.path, newPath)),
+      );
+      renameTarget = null;
+      renameName = "";
+      await refresh();
+      say("ok", `Renamed ${target.isDir ? "folder" : "file"}`);
+    } catch (cause) {
+      say("err", errorText(cause));
+    } finally {
+      renameBusy = false;
+    }
+  }
+
+  async function deleteWorkspaceEntry(path: string) {
+    const entry = tree.find((item) => item.path === path);
+    if (!workspace || !entry) return;
+    const containsPath = (candidate: string) =>
+      candidate === path || (entry.isDir && candidate.startsWith(`${path}/`));
+    const affectedTabs = tabs.filter((tab) => containsPath(tab.path));
+    const hasUnsavedChanges = affectedTabs.some((tab) => tab.content !== tab.original);
+    const description = entry.isDir
+      ? `folder "${entry.name}" and everything inside it`
+      : `file "${entry.name}"`;
+    const warning = hasUnsavedChanges
+      ? " Unsaved edits in open files will also be discarded."
+      : "";
+    if (!confirm(`Delete ${description}?${warning} This cannot be undone.`)) return;
+
+    try {
+      await deleteEntry(path);
+      const activeIndex = tabs.findIndex((tab) => tab.path === activePath);
+      const remainingTabs = tabs.filter((tab) => !containsPath(tab.path));
+      if (activePath && containsPath(activePath)) {
+        activePath = remainingTabs[
+          Math.min(Math.max(activeIndex, 0), remainingTabs.length - 1)
+        ]?.path ?? null;
+      }
+      tabs = remainingTabs;
+      collapsed = new Set([...collapsed].filter((item) => !containsPath(item)));
+      if (selectedDirectory && containsPath(selectedDirectory)) selectedDirectory = null;
+      if (renameTarget && containsPath(renameTarget.path)) {
+        renameTarget = null;
+        renameName = "";
+      }
+      if (creatingParent && containsPath(creatingParent)) cancelCreate();
+      await refresh();
+      say("ok", `Deleted ${entry.isDir ? "folder" : "file"}`);
+    } catch (cause) {
+      say("err", errorText(cause));
     }
   }
 
@@ -746,6 +865,21 @@
     }
   }
 
+  async function formatActiveDocument() {
+    const tab = activeTab;
+    if (!tab || !canFormatDocument(tab.path) || formatting) return;
+    formatting = true;
+    try {
+      const formatted = await formatDocument(tab.path, tab.content);
+      updateContent(tab.path, formatted);
+      say("ok", `Formatted ${tab.name}`);
+    } catch (cause) {
+      say("err", errorText(cause));
+    } finally {
+      formatting = false;
+    }
+  }
+
   function closeTab(path: string) {
     const index = tabs.findIndex((tab) => tab.path === path);
     if (index === -1) return;
@@ -765,6 +899,7 @@
   }
 
   function toggleDir(path: string) {
+    selectedDirectory = path;
     const next = new Set(collapsed);
     if (next.has(path)) next.delete(path);
     else next.add(path);
@@ -779,8 +914,6 @@
 
   function handleWindowClick(event: MouseEvent) {
     const target = event.target;
-    if (!(target instanceof Element && target.closest("[data-create-root]")))
-      createMenu = false;
     if (target instanceof Element && target.closest("[data-context-menu]")) return;
     if (target instanceof Element && target.closest("[data-menu-root]")) return;
     menu = null;
@@ -921,7 +1054,6 @@
     if (event.key === "Escape") {
       menu = null;
       contextMenu = null;
-      createMenu = false;
       if (creating) cancelCreate();
       paletteOpen = false;
       return;
@@ -1507,37 +1639,24 @@
                 <!-- <span class="text-[9px] text-faint">scanning</span> -->
               {/if}
               <div class="ml-auto flex items-center gap-0.5">
-                <div class="relative" data-create-root>
+                {#if sidebarView === "files"}
                   <button
-                    class="grid size-5 place-items-center rounded-md text-faint transition-colors duration-100 enabled:hover:bg-hover enabled:hover:text-ink disabled:opacity-35"
+                    class="grid size-6 place-items-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink disabled:opacity-35"
                     type="button"
-                    title="New file or folder"
-                    aria-label="New file or folder"
-                    aria-expanded={createMenu}
+                    title="New file"
+                    aria-label="New file"
                     disabled={!workspace}
-                    onclick={() => (createMenu = !createMenu)}
-                  >
-                    <Icon name="add" size={13} />
-                  </button>
-                  {#if createMenu}
-                    <div
-                      class="absolute top-full right-0 z-30 mt-1 w-36 rounded-lg border border-line bg-elev p-1 shadow-[0_16px_40px_rgba(0,0,0,.55)]"
-                    >
-                      <button
-                        class="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-muted hover:bg-hover hover:text-ink"
-                        type="button"
-                        onclick={() => beginCreate("file")}
-                        ><Icon name="file" size={12} />New file</button
-                      >
-                      <button
-                        class="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-muted hover:bg-hover hover:text-ink"
-                        type="button"
-                        onclick={() => beginCreate("folder")}
-                        ><Icon name="folder" size={12} />New folder</button
-                      >
-                    </div>
-                  {/if}
-                </div>
+                    onclick={() => beginCreate("file")}
+                  ><Icon name="file" size={13} /></button>
+                  <button
+                    class="grid size-6 place-items-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink disabled:opacity-35"
+                    type="button"
+                    title="New folder"
+                    aria-label="New folder"
+                    disabled={!workspace}
+                    onclick={() => beginCreate("folder")}
+                  ><Icon name="folder" size={13} /></button>
+                {/if}
                 <button
                   class="grid size-5 place-items-center rounded-md text-faint transition-colors duration-100 enabled:hover:bg-hover enabled:hover:text-ink disabled:opacity-35"
                   type="button"
@@ -1559,50 +1678,6 @@
                 ? 'flex flex-col overflow-hidden'
                 : 'overflow-auto py-1'}"
             >
-              {#if creating && workspace}
-                <form
-                  class="mx-2 mt-1 mb-2 flex items-center gap-1.5 rounded-md border border-line bg-elev py-1 pr-1 pl-2"
-                  onsubmit={submitCreate}
-                >
-                  <Icon
-                    name={creating === "file" ? "file" : "folder"}
-                    size={13}
-                  />
-                  <input
-                    class="h-6 min-w-0 flex-1 border-0 bg-transparent text-[11.5px] text-ink outline-none placeholder:text-faint"
-                    placeholder={creating === "file"
-                      ? "File name"
-                      : "Folder name"}
-                    aria-label={creating === "file"
-                      ? "New file name"
-                      : "New folder name"}
-                    bind:value={newName}
-                    use:focusInput
-                    spellcheck="false"
-                    onkeydown={(event) => {
-                      if (event.key === "Escape") {
-                        event.preventDefault();
-                        cancelCreate();
-                      }
-                    }}
-                  />
-                  <button
-                    class="inline-flex h-6 shrink-0 items-center rounded px-1.5 text-[10px] font-semibold text-muted hover:bg-hover hover:text-ink disabled:opacity-40"
-                    type="submit"
-                    disabled={creatingBusy || newName.trim() === ""}
-                    >Create</button
-                  >
-                  <button
-                    class="grid size-5 shrink-0 place-items-center rounded text-faint hover:bg-hover hover:text-ink"
-                    type="button"
-                    title="Cancel"
-                    aria-label="Cancel"
-                    onclick={cancelCreate}
-                  >
-                    <Icon name="close" size={11} />
-                  </button>
-                </form>
-              {/if}
               {#if !workspace}
                 <div class="px-3.5 py-4">
                   <p class="m-0 text-xs leading-relaxed text-faint">
@@ -1622,6 +1697,20 @@
                   entries={tree}
                   {collapsed}
                   {activePath}
+                  {selectedDirectory}
+                  createKind={creating}
+                  createParent={creatingParent}
+                  createName={newName}
+                  createBusy={creatingBusy}
+                  renamePath={renameTarget?.path ?? null}
+                  {renameName}
+                  {renameBusy}
+                  onCreateName={(value) => (newName = value)}
+                  onCreate={(kind, parent, value) => void submitCreate(kind, parent, value)}
+                  onCancelCreate={cancelCreate}
+                  onRenameName={(value) => (renameName = value)}
+                  onRename={(path, value) => void submitRename(path, value)}
+                  onCancelRename={cancelRename}
                   onOpen={(path) => void openFile(path)}
                   onToggleDir={toggleDir}
                 />
@@ -1864,6 +1953,16 @@
                 </button>
               </div>
             {/each}
+            <button
+              class="grid w-8 shrink-0 place-items-center border-l border-line text-faint transition-colors duration-100 hover:bg-elev hover:text-ink disabled:opacity-35"
+              type="button"
+              title="Format Document"
+              aria-label="Format Document"
+              disabled={!canFormatDocument(activeTab.path) || formatting}
+              onclick={() => void formatActiveDocument()}
+            >
+              <Icon name="format" size={14} />
+            </button>
             <button
               class="ml-auto grid w-9 shrink-0 place-items-center border-l border-line text-faint transition-colors duration-100 hover:bg-elev hover:text-ink"
               type="button"
@@ -2143,9 +2242,15 @@
         <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { closeTab(contextMenu!.path!); closeContextMenu(); }}><Icon name="close" size={14} />Close Tab</button>
       {/if}
       <div class="my-1 h-px bg-line"></div>
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => beginRename(contextMenu!.path!)}><Icon name="text" size={14} />Rename</button>
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-danger hover:bg-hover" type="button" role="menuitem" onclick={() => { const path = contextMenu!.path!; closeContextMenu(); void deleteWorkspaceEntry(path); }}><Icon name="close" size={14} />Delete</button>
+      <div class="my-1 h-px bg-line"></div>
     {:else if contextMenu.kind === "directory" && contextMenu.path}
       <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { toggleDir(contextMenu!.path!); closeContextMenu(); }}><Icon name="folder" size={14} />{collapsed.has(contextMenu.path) ? "Expand Folder" : "Collapse Folder"}</button>
       <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { void copyToClipboard(contextMenu!.path!); closeContextMenu(); }}><Icon name="copy" size={14} />Copy Path</button>
+      <div class="my-1 h-px bg-line"></div>
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => beginRename(contextMenu!.path!)}><Icon name="text" size={14} />Rename</button>
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-danger hover:bg-hover" type="button" role="menuitem" onclick={() => { const path = contextMenu!.path!; closeContextMenu(); void deleteWorkspaceEntry(path); }}><Icon name="close" size={14} />Delete</button>
       <div class="my-1 h-px bg-line"></div>
     {:else if contextMenu.kind === "tab" && contextMenu.path}
       <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { focusTab(contextMenu!.path!); closeContextMenu(); }}><Icon name="file" size={14} />Activate Tab</button>
@@ -2157,6 +2262,10 @@
       <div class="my-1 h-px bg-line"></div>
     {/if}
     {#if contextMenu.kind === "text"}
+      {#if contextTarget?.classList.contains("cm-editor") && activeTab && canFormatDocument(activeTab.path)}
+        <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" disabled={formatting} onclick={() => { closeContextMenu(true); void formatActiveDocument(); }}><Icon name="format" size={14} />Format Document</button>
+        <div class="my-1 h-px bg-line"></div>
+      {/if}
       <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink disabled:opacity-40" type="button" role="menuitem" disabled={contextSelection() === ""} onclick={() => { cutContextSelection(); closeContextMenu(true); }}><Icon name="cut" size={14} />Cut</button>
       <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink disabled:opacity-40" type="button" role="menuitem" disabled={contextSelection() === ""} onclick={() => { void copyToClipboard(contextSelection()); closeContextMenu(true); }}><Icon name="copy" size={14} />Copy</button>
       <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { void pasteContext(); closeContextMenu(true); }}><Icon name="paste" size={14} />Paste</button>

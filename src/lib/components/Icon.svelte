@@ -63,6 +63,7 @@
     list: ListSettingIcon,
     git: GitBranchIcon,
     commit: GitCommitIcon,
+    format: ListSettingIcon,
     add: Add01Icon,
     unstage: Undo02Icon,
     clock: ClockIcon,

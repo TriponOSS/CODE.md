@@ -55,6 +55,14 @@ export function createEntry(name: string, directory: boolean): Promise<string> {
   return call<string>("create_entry", { name, directory });
 }
 
+export function renameEntry(path: string, name: string): Promise<string> {
+  return call<string>("rename_entry", { path, name });
+}
+
+export function deleteEntry(path: string): Promise<void> {
+  return call<void>("delete_entry", { path });
+}
+
 export function searchWorkspace(query: string): Promise<SearchHit[]> {
   return call<SearchHit[]>("search_workspace", { query });
 }

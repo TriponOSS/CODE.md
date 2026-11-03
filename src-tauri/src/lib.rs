@@ -19,6 +19,8 @@ pub fn run() {
             workspace::read_file,
             workspace::save_file,
             workspace::create_entry,
+            workspace::rename_entry,
+            workspace::delete_entry,
             workspace::search_workspace,
             skills::scan_skills,
             git::git_status,

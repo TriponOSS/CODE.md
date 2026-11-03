@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -338,10 +338,43 @@ pub fn create_entry(
     directory: bool,
 ) -> Result<String, String> {
     let root = current_root(&state)?;
-    let name = name.trim();
+    create_entry_at(&root, &name, directory)
+}
+
+fn create_entry_at(root: &Path, requested: &str, directory: bool) -> Result<String, String> {
+    let relative = PathBuf::from(requested.trim());
+    if relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err("path must stay inside the open workspace".to_string());
+    }
+    let name = relative
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "name is empty".to_string())?
+        .trim();
     validate_entry_name(name)?;
-    let path = root.join(name);
-    if path.exists() {
+    let requested_parent = relative.parent().unwrap_or_else(|| Path::new(""));
+    let parent = if requested_parent.as_os_str().is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(requested_parent)
+            .canonicalize()
+            .map_err(|e| format!("cannot resolve parent folder: {e}"))?
+    };
+    if !parent.starts_with(root) {
+        return Err("path is outside the open workspace".to_string());
+    }
+    if !parent.is_dir() {
+        return Err("parent is not a folder".to_string());
+    }
+    let path = parent.join(name);
+    if fs::symlink_metadata(&path).is_ok() {
         return Err(format!("{name} already exists"));
     }
     if directory {
@@ -353,7 +386,79 @@ pub fn create_entry(
             .open(&path)
             .map_err(|e| format!("cannot create file: {e}"))?;
     }
-    Ok(relative_slash(&root, &path))
+    Ok(relative_slash(root, &path))
+}
+
+fn resolve_entry_for_mutation(root: &Path, requested: &str) -> Result<PathBuf, String> {
+    let raw = PathBuf::from(requested);
+    let candidate = if raw.is_absolute() { raw } else { root.join(raw) };
+    let name = candidate
+        .file_name()
+        .ok_or_else(|| "cannot modify the workspace root".to_string())?;
+    if name.to_str().is_some_and(|name| name == "." || name == "..") {
+        return Err("cannot modify the workspace root or its parent".to_string());
+    }
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| "cannot resolve entry parent".to_string())?
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve entry parent: {e}"))?;
+    if !parent.starts_with(root) {
+        return Err("path is outside the open workspace".to_string());
+    }
+    let resolved = parent.join(name);
+    if resolved == root {
+        return Err("cannot modify the workspace root".to_string());
+    }
+    fs::symlink_metadata(&resolved)
+        .map_err(|e| format!("cannot resolve {}: {e}", resolved.display()))?;
+    Ok(resolved)
+}
+
+fn rename_entry_at(root: &Path, requested: &str, new_name: &str) -> Result<String, String> {
+    let source = resolve_entry_for_mutation(root, requested)?;
+    let new_name = new_name.trim();
+    validate_entry_name(new_name)?;
+    let parent = source
+        .parent()
+        .ok_or_else(|| "cannot resolve entry parent".to_string())?;
+    let destination = parent.join(new_name);
+    if destination == source {
+        return Ok(relative_slash(root, &source));
+    }
+    if fs::symlink_metadata(&destination).is_ok() {
+        return Err(format!("{new_name} already exists"));
+    }
+    fs::rename(&source, &destination).map_err(|e| format!("cannot rename entry: {e}"))?;
+    Ok(relative_slash(root, &destination))
+}
+
+fn delete_entry_at(root: &Path, requested: &str) -> Result<(), String> {
+    let path = resolve_entry_for_mutation(root, requested)?;
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|e| format!("cannot inspect entry: {e}"))?;
+    let result = if metadata.file_type().is_dir() {
+        fs::remove_dir_all(&path)
+    } else {
+        fs::remove_file(&path)
+    };
+    result.map_err(|e| format!("cannot delete entry: {e}"))
+}
+
+#[tauri::command]
+pub fn rename_entry(
+    state: State<'_, WorkspaceState>,
+    path: String,
+    name: String,
+) -> Result<String, String> {
+    let root = current_root(&state)?;
+    rename_entry_at(&root, &path, &name)
+}
+
+#[tauri::command]
+pub fn delete_entry(state: State<'_, WorkspaceState>, path: String) -> Result<(), String> {
+    let root = current_root(&state)?;
+    delete_entry_at(&root, &path)
 }
 
 #[tauri::command]
@@ -492,6 +597,47 @@ mod tests {
         assert!(validate_entry_name("..").is_err());
         assert!(validate_entry_name("docs/note.md").is_err());
         assert!(validate_entry_name("docs\\note.md").is_err());
+    }
+
+    #[test]
+    fn create_entry_supports_nested_folders_and_rejects_escape() {
+        let root = scratch_dir("create-nested");
+        fs::create_dir(root.join("docs")).unwrap();
+
+        assert_eq!(create_entry_at(&root, "docs/note.md", false).unwrap(), "docs/note.md");
+        assert!(root.join("docs/note.md").is_file());
+        assert!(create_entry_at(&root, "../escape.md", false).is_err());
+        assert!(create_entry_at(&root, "missing/note.md", false).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rename_entry_moves_files_and_refuses_collisions() {
+        let root = scratch_dir("rename");
+        fs::write(root.join("old.md"), "contents").unwrap();
+        fs::write(root.join("taken.md"), "existing").unwrap();
+
+        assert_eq!(rename_entry_at(&root, "old.md", "new.md").unwrap(), "new.md");
+        assert_eq!(fs::read_to_string(root.join("new.md")).unwrap(), "contents");
+        assert!(rename_entry_at(&root, "new.md", "taken.md").is_err());
+        assert!(rename_entry_at(&root, "new.md", "../outside.md").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_entry_removes_files_and_directories_without_following_symlinks() {
+        let root = scratch_dir("delete");
+        fs::create_dir_all(root.join("folder/nested")).unwrap();
+        fs::write(root.join("folder/nested/note.md"), "contents").unwrap();
+        fs::write(root.join("note.md"), "contents").unwrap();
+
+        delete_entry_at(&root, "note.md").unwrap();
+        delete_entry_at(&root, "folder").unwrap();
+        assert!(!root.join("note.md").exists());
+        assert!(!root.join("folder").exists());
+        assert!(delete_entry_at(&root, "..").is_err());
+        assert!(delete_entry_at(&root, "folder/..").is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
