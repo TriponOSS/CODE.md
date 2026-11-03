@@ -20,4 +20,31 @@ export type SearchHit = {
   text: string;
 };
 
-export type SidebarView = "files" | "outline" | "skills" | "search" | "settings";
+export type GitFile = {
+  path: string;
+  index: string;
+  worktree: string;
+  staged: boolean;
+  unstaged: boolean;
+  untracked: boolean;
+  originalPath: string | null;
+};
+
+export type GitStatus = {
+  repoRoot: string;
+  branch: string;
+  detached: boolean;
+  ahead: number;
+  behind: number;
+  clean: boolean;
+  files: GitFile[];
+};
+
+export type GitCommit = {
+  hash: string;
+  author: string;
+  date: string;
+  subject: string;
+};
+
+export type SidebarView = "files" | "outline" | "skills" | "search" | "git" | "settings";

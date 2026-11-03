@@ -1,3 +1,4 @@
+mod git;
 mod skills;
 mod workspace;
 
@@ -19,6 +20,13 @@ pub fn run() {
             workspace::save_file,
             workspace::search_workspace,
             skills::scan_skills,
+            git::git_status,
+            git::git_init,
+            git::git_diff,
+            git::git_stage,
+            git::git_unstage,
+            git::git_commit,
+            git::git_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

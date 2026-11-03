@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { SearchHit, SkillInfo, TreeEntry } from "./types";
+import type { GitCommit, GitStatus, SearchHit, SkillInfo, TreeEntry } from "./types";
 
 /**
  * True only inside the Tauri webview. The UI can still render in a plain
@@ -53,4 +53,32 @@ export function saveFile(path: string, content: string): Promise<void> {
 
 export function searchWorkspace(query: string): Promise<SearchHit[]> {
   return call<SearchHit[]>("search_workspace", { query });
+}
+
+export function getGitStatus(): Promise<GitStatus | null> {
+  return call<GitStatus | null>("git_status");
+}
+
+export function initGit(): Promise<GitStatus> {
+  return call<GitStatus>("git_init");
+}
+
+export function getGitDiff(path: string, staged: boolean): Promise<string> {
+  return call<string>("git_diff", { path, staged });
+}
+
+export function stageFiles(paths: string[]): Promise<void> {
+  return call<void>("git_stage", { paths });
+}
+
+export function unstageFiles(paths: string[]): Promise<void> {
+  return call<void>("git_unstage", { paths });
+}
+
+export function commitFiles(message: string): Promise<string> {
+  return call<string>("git_commit", { message });
+}
+
+export function getGitLog(limit = 20): Promise<GitCommit[]> {
+  return call<GitCommit[]>("git_log", { limit });
 }

@@ -28,12 +28,12 @@
   });
 </script>
 
-<div class="h-full overflow-auto bg-editor p-4.5 max-[1100px]:p-3" bind:this={container} role="document">
+<div class="h-full overflow-auto bg-editor" bind:this={container} role="document">
   {#if content.trim() === ""}
-    <p class="mx-auto max-w-[760px] px-9 py-8 text-faint">This file is empty.</p>
+    <p class="mx-auto max-w-[720px] px-8 py-10 text-faint">This file is empty.</p>
   {:else if markdownMode}
-    <article class="prose mx-auto max-w-[760px] rounded-xl border border-line bg-panel px-9 pt-8 pb-16 max-[1100px]:px-5 max-[1100px]:pt-6 max-[1100px]:pb-12">{@html html}</article>
+    <article class="prose mx-auto max-w-[720px] px-8 pt-8 pb-20">{@html html}</article>
   {:else}
-    <pre class="mx-auto max-w-[900px] rounded-xl border border-line bg-panel px-7 pt-6 pb-14 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap break-words text-muted [tab-size:2]">{content}</pre>
+    <pre class="mx-auto max-w-[900px] px-6 pt-6 pb-20 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap break-words text-muted [tab-size:2]">{content}</pre>
   {/if}
 </div>
