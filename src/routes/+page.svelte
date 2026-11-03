@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { browser } from "$app/environment";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -29,9 +29,13 @@
   import { documentStats, extractOutline } from "$lib/outline";
   import {
     loadSettings,
+    loadCustomThemes,
     saveSettings,
+    saveCustomThemes,
     type AppSettings,
+    type ColorTheme,
     type Theme,
+    type ThemeDefinition,
   } from "$lib/settings";
   import type {
     GitCommit,
@@ -61,6 +65,14 @@
     return value === "light" || value === "system" || value === "dark"
       ? value
       : "dark";
+  }
+
+  function storedColorTheme(): ColorTheme {
+    if (!browser) return "t3-code";
+    const value = localStorage.getItem("codemd:color-theme");
+    return value === "t3-chat" || value === "grove" || value === "ocean" || value === "ember" || value === "iris" || value === "t3-code"
+      ? value
+      : value?.startsWith("custom:") ? value as ColorTheme : "t3-code";
   }
 
   type Tab = {
@@ -183,6 +195,8 @@
   let activePath = $state<string | null>(null);
   let sidebarView = $state<SidebarView>("files");
   let theme = $state<Theme>(storedTheme());
+  let colorTheme = $state<ColorTheme>(storedColorTheme());
+  let customThemes = $state<ThemeDefinition[]>(loadCustomThemes());
   let menu = $state<"file" | "view" | "go" | null>(null);
   let paletteOpen = $state(false);
   let sidebarOpen = $state(true);
@@ -206,6 +220,15 @@
   let refreshing = $state(false);
   let notice = $state<{ kind: "ok" | "err"; text: string } | null>(null);
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  let contextMenu = $state<{
+    x: number;
+    y: number;
+    path: string | null;
+    kind: "file" | "directory" | "tab" | "text" | "selection" | "default";
+  } | null>(null);
+  let contextTarget: HTMLElement | null = null;
+  let contextRange: Range | null = null;
+  let contextSelectedText = "";
   let git = $state<GitStatus | null>(null);
   let gitCommits = $state<GitCommit[]>([]);
   let gitLoading = $state(false);
@@ -299,10 +322,10 @@
       run: () => (sidebarView = "settings"),
     },
     {
-      id: "rescan",
-      label: "Rescan folder",
+      id: "refresh",
+      label: "Refresh",
       keywords: "refresh reload files",
-      disabled: !workspace || refreshing,
+      disabled: !workspace,
       run: () => void refresh(),
     },
     {
@@ -365,6 +388,56 @@
       (next === "system" &&
         !window.matchMedia("(prefers-color-scheme: light)").matches);
     document.documentElement.dataset.theme = dark ? "dark" : "light";
+    applyColorTheme(colorTheme);
+  }
+
+  function applyColorTheme(next: ColorTheme) {
+    colorTheme = next;
+    if (!browser) return;
+    localStorage.setItem("codemd:color-theme", next);
+    document.documentElement.dataset.palette = next;
+    const root = document.documentElement;
+    const custom = next.startsWith("custom:")
+      ? customThemes.find((item) => `custom:${item.id}` === next)
+      : undefined;
+    const dark = root.dataset.theme === "dark";
+    const colors = custom ? (dark ? custom.variants?.dark ?? custom.colors : custom.colors) : undefined;
+    const tokenMap: Record<string, string> = {
+      canvas: "--bg",
+      chrome: "--bg-rail",
+      sidebar: "--bg-panel",
+      surface: "--bg-editor",
+      surfaceRaised: "--bg-elev",
+      surfaceOverlay: "--bg-hover",
+      sidebarRowActive: "--bg-active",
+      border: "--line",
+      input: "--line-strong",
+      text: "--text",
+      textMuted: "--text-dim",
+      secondaryLabel: "--text-faint",
+      accent: "--accent",
+      accentForeground: "--accent-ink",
+      error: "--err",
+      warning: "--ok",
+      terminalSelection: "--selection",
+      codeForeground: "--syntax-strong",
+    };
+    for (const property of Object.values(tokenMap)) root.style.removeProperty(property);
+    if (colors) {
+      for (const [key, property] of Object.entries(tokenMap)) {
+        const value = colors[key];
+        if (value) root.style.setProperty(property, value);
+      }
+    }
+    if (!custom) return;
+    root.style.setProperty("--accent-strong", colors?.accent ?? "#b7a0f4");
+    root.style.setProperty("--ok", colors?.warning ?? "#8dbb9a");
+  }
+
+  function updateCustomThemes(next: ThemeDefinition[]) {
+    customThemes = next;
+    saveCustomThemes(next);
+    if (colorTheme.startsWith("custom:")) applyColorTheme(colorTheme);
   }
 
   async function forgetWorkspace() {
@@ -753,13 +826,146 @@
     const target = event.target;
     if (!(target instanceof Element && target.closest("[data-create-root]")))
       createMenu = false;
+    if (target instanceof Element && target.closest("[data-context-menu]")) return;
     if (target instanceof Element && target.closest("[data-menu-root]")) return;
     menu = null;
+    contextMenu = null;
+  }
+
+  async function handleContextMenu(event: MouseEvent) {
+    const app = document.querySelector(".app");
+    if (!app?.contains(event.target as Node)) return;
+    event.preventDefault();
+    if (event.target instanceof Element && event.target.closest("[data-context-menu]")) return;
+    const target = event.target instanceof Element ? event.target : null;
+    const contextElement = target?.closest<HTMLElement>("[data-context-path]") ?? null;
+    const editable = target?.closest<HTMLElement>(
+      'input:not([type="button"]):not([type="submit"]), textarea, [contenteditable="true"], .cm-editor',
+    ) ?? null;
+    const textInput = editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement
+      ? editable
+      : null;
+    const selectionStart = textInput?.selectionStart ?? null;
+    const selectionEnd = textInput?.selectionEnd ?? null;
+    const inputSelected = selectionStart !== null && selectionEnd !== null && selectionStart !== selectionEnd;
+    const selection = window.getSelection();
+    contextRange = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+    contextSelectedText = inputSelected && textInput
+      ? textInput.value.slice(selectionStart, selectionEnd)
+      : contextRange?.toString() ?? "";
+    const kind = contextElement?.dataset.contextKind;
+    const menuKind = contextElement
+      ? kind === "tab" ? "tab" : kind === "directory" ? "directory" : "file"
+      : editable
+        ? "text"
+        : contextSelectedText !== ""
+          ? "selection"
+          : "default";
+
+    contextTarget = editable;
+    if (editable && document.activeElement !== editable) editable.focus();
+    const targetRect = target?.getBoundingClientRect();
+    const x = event.clientX || targetRect?.left || 0;
+    const y = event.clientY || targetRect?.bottom || 0;
+    contextMenu = {
+      x: Math.max(8, Math.min(x, window.innerWidth - 236)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 330)),
+      path: contextElement?.dataset.contextPath ?? null,
+      kind: menuKind,
+    };
+    await tick();
+    document.querySelector<HTMLElement>('[data-context-menu] [role="menuitem"]:not(:disabled)')?.focus();
+  }
+
+  function handleContextMenuKeydown(event: KeyboardEvent) {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") return;
+    event.preventDefault();
+    const items = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>(
+      '[role="menuitem"]:not(:disabled)',
+    )];
+    if (items.length === 0) return;
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? items.length - 1
+        : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+    items[next]?.focus();
+  }
+
+  async function copyToClipboard(value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      const field = document.createElement("textarea");
+      field.value = value;
+      field.style.position = "fixed";
+      field.style.opacity = "0";
+      document.body.append(field);
+      field.select();
+      document.execCommand("copy");
+      field.remove();
+    }
+  }
+
+  function contextSelection(): string {
+    return contextSelectedText;
+  }
+
+  function cutContextSelection() {
+    if (contextTarget instanceof HTMLInputElement || contextTarget instanceof HTMLTextAreaElement) {
+      const start = contextTarget.selectionStart;
+      const end = contextTarget.selectionEnd;
+      if (start !== null && end !== null && start !== end) {
+        void copyToClipboard(contextTarget.value.slice(start, end));
+        contextTarget.setRangeText("", start, end, "start");
+        contextTarget.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      return;
+    }
+    if (contextTarget && contextRange && contextSelectedText !== "") {
+      void copyToClipboard(contextSelectedText);
+      contextTarget.focus();
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(contextRange);
+    }
+    document.execCommand("cut");
+  }
+
+  async function pasteContext() {
+    try {
+      const value = await navigator.clipboard.readText();
+      if (contextTarget instanceof HTMLInputElement || contextTarget instanceof HTMLTextAreaElement) {
+        const start = contextTarget.selectionStart;
+        const end = contextTarget.selectionEnd;
+        if (start !== null && end !== null) {
+          contextTarget.setRangeText(value, start, end, "end");
+          contextTarget.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      } else {
+        contextTarget?.focus();
+        if (contextRange) {
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(contextRange);
+        }
+        document.execCommand("insertText", false, value);
+      }
+    } catch (cause) {
+      say("err", errorText(cause));
+    }
+  }
+
+  function closeContextMenu(restoreFocus = false) {
+    contextMenu = null;
+    if (restoreFocus) contextTarget?.focus();
   }
 
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === "Escape") {
       menu = null;
+      contextMenu = null;
       createMenu = false;
       if (creating) cancelCreate();
       paletteOpen = false;
@@ -802,6 +1008,7 @@
 
   onMount(() => {
     applyTheme(theme);
+    applyColorTheme(colorTheme);
     applyPreferences();
     let unlisten: UnlistenFn | undefined;
     const narrow = window.matchMedia("(max-width: 900px)");
@@ -852,7 +1059,7 @@
   });
 </script>
 
-<svelte:window onkeydown={handleKeydown} onclick={handleWindowClick} />
+<svelte:window onkeydown={handleKeydown} onclick={handleWindowClick} oncontextmenu={handleContextMenu} />
 
 <div
   class="app flex h-screen flex-col bg-app"
@@ -953,11 +1160,11 @@
             <button
               class="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink disabled:opacity-40"
               type="button"
-              disabled={!workspace || refreshing}
+              disabled={!workspace}
               onclick={() => {
                 menu = null;
                 void refresh();
-              }}><Icon name="refresh" size={14} />Rescan folder</button
+              }}><Icon name="refresh" size={14} />Refresh</button
             >
           </div>
         {/if}
@@ -1115,7 +1322,7 @@
     </div>
 
     <button
-      class="mr-2 flex h-7 w-[250px] shrink-0 items-center gap-1 rounded-md bg-elev px-1 py-1 text-left text-xs text-faint transition-colors duration-100 hover:bg-hover hover:text-muted"
+      class="mr-2 flex h-6 w-[250px] shrink-0 items-center gap-2 rounded-md bg-elev px-2.5 text-left text-xs text-faint transition-colors duration-100 hover:bg-hover hover:text-muted"
       type="button"
       title="Search files or run a command (Ctrl K)"
       onclick={() => {
@@ -1301,18 +1508,6 @@
             <button
               class="grid size-8 place-items-center rounded-md text-faint transition-colors duration-100 hover:bg-elev hover:text-ink"
               type="button"
-              title="Quick open (Ctrl K)"
-              aria-label="Quick open"
-              onclick={() => {
-                menu = null;
-                paletteOpen = true;
-              }}
-            >
-              <Icon name="command" size={18} />
-            </button>
-            <button
-              class="grid size-8 place-items-center rounded-md text-faint transition-colors duration-100 hover:bg-elev hover:text-ink"
-              type="button"
               title="Settings (Ctrl ,)"
               aria-label="Settings"
               onclick={() => (sidebarView = "settings")}
@@ -1391,8 +1586,8 @@
                 <button
                   class="grid size-5 place-items-center rounded-md text-faint transition-colors duration-100 enabled:hover:bg-hover enabled:hover:text-ink disabled:opacity-35"
                   type="button"
-                  title="Rescan folder"
-                  aria-label="Rescan folder"
+                  title="Refresh"
+                  aria-label="Refresh"
                   disabled={!workspace}
                   onclick={() => void refresh()}
                 >
@@ -1487,7 +1682,8 @@
                 <GitView
                   status={git}
                   loading={gitLoading}
-                  error={gitError || gitActionError}
+                  error={gitError}
+                  actionError={gitActionError}
                   busy={gitBusy}
                   commits={gitCommits}
                   selectedPath={gitSelected?.path ?? null}
@@ -1645,15 +1841,18 @@
         <div class="min-h-0 flex-1 overflow-hidden">
           <SettingsView
             {theme}
+            {colorTheme}
+            {customThemes}
             {settings}
             {workspace}
             {workspaceName}
             fileCount={tree.filter((entry) => !entry.isDir).length}
             skillCount={skills.length}
-            {refreshing}
             onTheme={applyTheme}
+            onColorTheme={applyColorTheme}
+            onCustomThemes={updateCustomThemes}
             onSettings={updateSettings}
-            onRescan={() => void refresh()}
+            onRefresh={() => void refresh()}
             onOpenFolder={() => void openFolder()}
             onForget={() => void forgetWorkspace()}
             onResetPreview={resetPreviewResize}
@@ -1672,6 +1871,8 @@
                 class="group/tab relative flex max-w-[220px] shrink-0 items-center rounded-lg transition-colors duration-100 {tab.path === activePath
                   ? 'bg-elev text-ink'
                   : 'text-faint hover:bg-elev/70 hover:text-muted'}"
+                data-context-path={tab.path}
+                data-context-kind="tab"
               >
                 <button
                   class="flex h-full min-w-0 items-center gap-[10px] px-3 py-1.5 text-[12px] leading-none {tab.path ===
@@ -1970,6 +2171,55 @@
     </span>
   </footer>
 </div>
+
+{#if contextMenu}
+  <div
+    class="fixed z-[100] max-h-[calc(100vh-16px)] w-56 overflow-auto rounded-md border border-line bg-elev p-1 shadow-[0_14px_38px_rgba(0,0,0,.5)]"
+    style="left: {contextMenu.x}px; top: {contextMenu.y}px"
+    role="menu"
+    tabindex="-1"
+    aria-label="Context menu"
+    data-context-menu
+    onkeydown={handleContextMenuKeydown}
+    oncontextmenu={(event) => event.preventDefault()}
+  >
+    {#if contextMenu.kind === "file" && contextMenu.path}
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { void openFile(contextMenu!.path!); closeContextMenu(); }}><Icon name="file" size={14} />Open</button>
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { void copyToClipboard(contextMenu!.path!); closeContextMenu(); }}><Icon name="copy" size={14} />Copy Path</button>
+      {#if tabs.some((tab) => tab.path === contextMenu?.path)}
+        <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { closeTab(contextMenu!.path!); closeContextMenu(); }}><Icon name="close" size={14} />Close Tab</button>
+      {/if}
+      <div class="my-1 h-px bg-line"></div>
+    {:else if contextMenu.kind === "directory" && contextMenu.path}
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { toggleDir(contextMenu!.path!); closeContextMenu(); }}><Icon name="folder" size={14} />{collapsed.has(contextMenu.path) ? "Expand Folder" : "Collapse Folder"}</button>
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { void copyToClipboard(contextMenu!.path!); closeContextMenu(); }}><Icon name="copy" size={14} />Copy Path</button>
+      <div class="my-1 h-px bg-line"></div>
+    {:else if contextMenu.kind === "tab" && contextMenu.path}
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { focusTab(contextMenu!.path!); closeContextMenu(); }}><Icon name="file" size={14} />Activate Tab</button>
+      {@const contextTab = tabs.find((tab) => tab.path === contextMenu?.path)}
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink disabled:opacity-40" type="button" role="menuitem" disabled={!contextTab || contextTab.content === contextTab.original} onclick={() => { focusTab(contextMenu!.path!); void save(); closeContextMenu(); }}><Icon name="save" size={14} />Save</button>
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { void copyToClipboard(contextMenu!.path!); closeContextMenu(); }}><Icon name="copy" size={14} />Copy Path</button>
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { closeTab(contextMenu!.path!); closeContextMenu(); }}><Icon name="close" size={14} />Close Tab</button>
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { for (const tab of [...tabs]) if (tab.path !== contextMenu?.path) closeTab(tab.path); closeContextMenu(); }}><Icon name="close" size={14} />Close Other Tabs</button>
+      <div class="my-1 h-px bg-line"></div>
+    {/if}
+    {#if contextMenu.kind === "text"}
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink disabled:opacity-40" type="button" role="menuitem" disabled={contextSelection() === ""} onclick={() => { cutContextSelection(); closeContextMenu(true); }}><Icon name="cut" size={14} />Cut</button>
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink disabled:opacity-40" type="button" role="menuitem" disabled={contextSelection() === ""} onclick={() => { void copyToClipboard(contextSelection()); closeContextMenu(true); }}><Icon name="copy" size={14} />Copy</button>
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { void pasteContext(); closeContextMenu(true); }}><Icon name="paste" size={14} />Paste</button>
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { if (contextTarget instanceof HTMLInputElement || contextTarget instanceof HTMLTextAreaElement) contextTarget.select(); else { contextTarget?.focus(); document.execCommand("selectAll"); } closeContextMenu(true); }}><Icon name="list" size={14} />Select All</button>
+      <div class="my-1 h-px bg-line"></div>
+    {:else if contextMenu.kind === "selection"}
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { void copyToClipboard(contextSelection()); closeContextMenu(); }}><Icon name="copy" size={14} />Copy</button>
+      <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { document.execCommand("selectAll"); closeContextMenu(); }}><Icon name="list" size={14} />Select All</button>
+      <div class="my-1 h-px bg-line"></div>
+    {/if}
+    <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink disabled:opacity-40" type="button" role="menuitem" disabled={!workspace} onclick={() => { void refresh(); closeContextMenu(); }}><Icon name="refresh" size={14} />Refresh</button>
+    <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { void openFolder(); closeContextMenu(); }}><Icon name="folder" size={14} />Open Folder</button>
+    <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { paletteOpen = true; closeContextMenu(); }}><Icon name="command" size={14} />Quick Open</button>
+    <button class="context-menu-item flex h-8 w-full items-center gap-2 rounded px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" role="menuitem" onclick={() => { sidebarView = "settings"; closeContextMenu(); }}><Icon name="settings" size={14} />Settings</button>
+  </div>
+{/if}
 
 {#if paletteOpen}
   <CommandPalette

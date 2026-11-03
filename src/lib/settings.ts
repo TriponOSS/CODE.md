@@ -1,4 +1,56 @@
 export type Theme = "dark" | "light" | "system";
+export type BuiltInColorTheme = "t3-code" | "t3-chat" | "grove" | "ocean" | "ember" | "iris";
+export type ColorTheme = BuiltInColorTheme | `custom:${string}`;
+
+export type ThemeDefinition = {
+  version: 1;
+  id: string;
+  name: string;
+  appearance: "light" | "dark";
+  author?: string;
+  description?: string;
+  colors: Record<string, string>;
+  variants?: { dark?: Record<string, string> };
+};
+
+export function parseThemeDefinition(value: unknown): ThemeDefinition {
+  if (!value || typeof value !== "object") throw new Error("Theme file must contain a JSON object.");
+  const theme = value as Partial<ThemeDefinition>;
+  const validColors = (colors: unknown): colors is Record<string, string> =>
+    !!colors && typeof colors === "object" && !Array.isArray(colors) &&
+    Object.entries(colors).every(([key, color]) => /^[a-zA-Z][a-zA-Z0-9]*$/.test(key) && typeof color === "string" && /^#[\da-fA-F]{6}$/.test(color));
+
+  if (theme.version !== 1) throw new Error("Unsupported theme version. Expected version 1.");
+  if (typeof theme.id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9-]*$/.test(theme.id)) {
+    throw new Error("Theme id must contain only letters, numbers, and hyphens.");
+  }
+  if (typeof theme.name !== "string" || theme.name.trim() === "") throw new Error("Theme name is required.");
+  if (theme.appearance !== "light" && theme.appearance !== "dark") throw new Error("Theme appearance must be light or dark.");
+  if (!validColors(theme.colors) || !theme.colors.canvas || !theme.colors.text || !theme.colors.accent) {
+    throw new Error("Theme colors must include canvas, text, and accent hex values.");
+  }
+  if (theme.variants?.dark !== undefined && !validColors(theme.variants.dark)) {
+    throw new Error("Dark variant colors must be six-digit hex values.");
+  }
+  return theme as ThemeDefinition;
+}
+
+const CUSTOM_THEMES_KEY = "codemd:custom-themes";
+
+export function loadCustomThemes(): ThemeDefinition[] {
+  if (typeof localStorage === "undefined") return [];
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(CUSTOM_THEMES_KEY) ?? "[]");
+    return Array.isArray(stored) ? stored.map(parseThemeDefinition) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveCustomThemes(themes: ThemeDefinition[]): void {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(themes));
+}
 
 export type AppSettings = {
   general: {

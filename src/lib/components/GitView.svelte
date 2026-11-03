@@ -6,6 +6,7 @@
     status,
     loading,
     error,
+    actionError,
     busy,
     commits,
     selectedPath,
@@ -21,6 +22,7 @@
     status: GitStatus | null;
     loading: boolean;
     error: string;
+    actionError: string;
     busy: boolean;
     commits: GitCommit[];
     selectedPath: string | null;
@@ -37,6 +39,7 @@
   let message = $state("");
   let committing = $state(false);
   let pushing = $state(false);
+  let graphOpen = $state(true);
 
   const stagedFiles = $derived(status?.files.filter((file) => file.staged) ?? []);
   const changedFiles = $derived(status?.files.filter((file) => file.unstaged || file.untracked) ?? []);
@@ -90,10 +93,13 @@
     <div class="min-h-0 flex-1 px-3.5 py-4">
       <p class="m-0 text-[13px] font-medium text-ink">No repository</p>
       <p class="mt-1.5 mb-0 text-xs leading-relaxed text-faint">This folder is not tracked by Git yet.</p>
+      {#if actionError}
+        <p class="mt-3 mb-0 text-xs leading-relaxed text-danger" role="alert">{actionError}</p>
+      {/if}
     </div>
     <div class="shrink-0 border-t border-line bg-panel p-2">
-      <button class="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-ink px-3 text-xs font-semibold text-app transition-opacity duration-100 hover:opacity-85" type="button" onclick={onInit}>
-        <Icon name="git" size={14} />Initialize repository
+      <button class="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-ink px-3 text-xs font-semibold text-app transition-opacity duration-100 hover:opacity-85 disabled:opacity-50" type="button" disabled={busy} onclick={onInit}>
+        <Icon name="git" size={14} />{busy ? "Initializing..." : "Initialize repository"}
       </button>
     </div>
   {:else}
@@ -110,6 +116,10 @@
         </span>
       </div>
     </div>
+
+    {#if actionError}
+      <p class="m-0 border-b border-line px-3 py-2 text-xs leading-relaxed text-danger" role="alert">{actionError}</p>
+    {/if}
 
     <div class="min-h-0 flex-1 overflow-auto pb-4">
       {#if total === 0}
@@ -160,20 +170,41 @@
         {/if}
       {/if}
 
-      {#if commits.length > 0}
-        <div class="mt-4 flex items-center justify-between px-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-faint">
-          <span>Recent commits</span>
-          <button class="rounded px-1 text-[10px] font-medium normal-case tracking-normal text-faint hover:text-ink" type="button" onclick={onRefresh}>Refresh</button>
+      <div class="mt-4 border-t border-line pt-2">
+        <div class="flex items-center px-2">
+          <button
+            class="flex min-w-0 flex-1 items-center gap-1.5 px-1 py-1 text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-faint hover:text-ink"
+            type="button"
+            aria-expanded={graphOpen}
+            onclick={() => (graphOpen = !graphOpen)}
+          >
+            <span class="transition-transform duration-100 {graphOpen ? 'rotate-90' : ''}"><Icon name="chevron" size={12} /></span>
+            <span>Graph</span>
+            <span class="font-normal normal-case tracking-normal">{commits.length}</span>
+          </button>
+          <button class="grid size-6 place-items-center rounded text-faint hover:bg-hover hover:text-ink" type="button" title="Refresh Git status and graph" aria-label="Refresh Git status and graph" onclick={onRefresh}>
+            <Icon name="refresh" size={13} />
+          </button>
         </div>
-        <div class="mt-1 px-1.5">
-          {#each commits as commit (commit.hash)}
-            <div class="flex items-start gap-2 rounded-md px-2 py-1.5" title="{commit.author} · {commit.date}">
-              <span class="mt-px shrink-0 font-mono text-[10px] text-faint">{commit.hash}</span>
-              <span class="min-w-0 flex-1 truncate text-[11.5px] text-muted">{commit.subject}</span>
+        {#if graphOpen}
+          {#if commits.length > 0}
+            <div class="mt-1 px-1.5">
+              {#each commits as commit, index (commit.hash)}
+                <div class="relative flex min-w-0 items-start gap-2 rounded-md px-2 py-1.5" title="{commit.author} · {commit.date}">
+                  <span class="relative flex w-3 shrink-0 justify-center self-stretch">
+                    {#if index < commits.length - 1}<span class="absolute top-0 bottom-[-6px] w-px bg-line"></span>{/if}
+                    <span class="relative mt-1 size-2 rounded-full border border-accent bg-panel"></span>
+                  </span>
+                  <span class="shrink-0 font-mono text-[10px] text-faint">{commit.hash}</span>
+                  <span class="min-w-0 flex-1 truncate text-[11.5px] text-muted">{commit.subject}</span>
+                </div>
+              {/each}
             </div>
-          {/each}
-        </div>
-      {/if}
+          {:else}
+            <p class="m-0 px-4 py-2 text-[11px] text-faint">No commits yet</p>
+          {/if}
+        {/if}
+      </div>
     </div>
 
     <form class="shrink-0 border-t border-line bg-panel p-2" onsubmit={submit}>

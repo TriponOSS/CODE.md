@@ -41,6 +41,8 @@
         aria-expanded={row.isDir ? !collapsed.has(row.path) : undefined}
         aria-selected={active}
         title={row.path}
+        data-context-path={row.path}
+        data-context-kind={row.isDir ? "directory" : "file"}
         onclick={() => (row.isDir ? onToggleDir(row.path) : onOpen(row.path))}
       >
         {#if row.isDir}

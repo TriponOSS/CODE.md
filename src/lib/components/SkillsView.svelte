@@ -20,7 +20,7 @@
   <div class="px-4.5 py-7">
     <p class="m-0 mb-1.5 text-[13px] font-medium text-ink">No skills found</p>
     <p class="m-0 text-xs leading-relaxed text-faint">
-      Add a <code class="font-mono text-accent">SKILL.md</code> with YAML frontmatter anywhere in this folder, then rescan.
+      Add a <code class="font-mono text-accent">SKILL.md</code> with YAML frontmatter anywhere in this folder, then refresh.
     </p>
   </div>
 {:else}
