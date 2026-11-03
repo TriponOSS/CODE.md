@@ -36,6 +36,7 @@ export type GitStatus = {
   detached: boolean;
   ahead: number;
   behind: number;
+  hasRemote: boolean;
   clean: boolean;
   files: GitFile[];
 };

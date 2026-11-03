@@ -51,6 +51,10 @@ export function saveFile(path: string, content: string): Promise<void> {
   return call<void>("save_file", { path, content });
 }
 
+export function createEntry(name: string, directory: boolean): Promise<string> {
+  return call<string>("create_entry", { name, directory });
+}
+
 export function searchWorkspace(query: string): Promise<SearchHit[]> {
   return call<SearchHit[]>("search_workspace", { query });
 }
@@ -77,6 +81,10 @@ export function unstageFiles(paths: string[]): Promise<void> {
 
 export function commitFiles(message: string): Promise<string> {
   return call<string>("git_commit", { message });
+}
+
+export function pushGit(): Promise<string> {
+  return call<string>("git_push");
 }
 
 export function getGitLog(limit = 20): Promise<GitCommit[]> {

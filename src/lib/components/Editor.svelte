@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { basicSetup } from "codemirror";
   import { EditorView, keymap } from "@codemirror/view";
-  import { EditorState, Prec } from "@codemirror/state";
+  import { Compartment, EditorState, Prec } from "@codemirror/state";
   import { markdown } from "@codemirror/lang-markdown";
   import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
   import { tags } from "@lezer/highlight";
@@ -13,6 +13,8 @@
     value,
     revealLine = 0,
     revealKey = 0,
+    wordWrap = true,
+    showLineNumbers = true,
     onChange,
     onSave,
   }: {
@@ -20,12 +22,15 @@
     value: string;
     revealLine?: number;
     revealKey?: number;
+    wordWrap?: boolean;
+    showLineNumbers?: boolean;
     onChange: (value: string) => void;
     onSave: () => void;
   } = $props();
 
   let host: HTMLDivElement;
   let view: EditorView | null = null;
+  const wrapCompartment = new Compartment();
 
   const theme = EditorView.theme(
     {
@@ -33,12 +38,13 @@
         height: "100%",
         backgroundColor: "var(--bg-editor)",
         color: "var(--text)",
-        fontSize: "13px",
+        fontSize: "var(--editor-font-size, 13px)",
       },
       "&.cm-focused": { outline: "none" },
       ".cm-scroller": {
         fontFamily: "var(--font-mono)",
-        lineHeight: "1.65",
+        lineHeight: "var(--editor-line-height, 1.65)",
+        tabSize: "var(--editor-tab-size, 2)",
         overflow: "auto",
       },
       ".cm-content": {
@@ -123,7 +129,7 @@
           ...(isMarkdownPath(path) ? [markdown()] : []),
           theme,
           syntaxHighlighting(highlight),
-          EditorView.lineWrapping,
+          wrapCompartment.of(wordWrap ? EditorView.lineWrapping : []),
           Prec.highest(
             keymap.of([
               {
@@ -161,6 +167,15 @@
   }
 
   $effect(() => {
+    const next = wordWrap;
+    if (view) {
+      view.dispatch({
+        effects: wrapCompartment.reconfigure(next ? EditorView.lineWrapping : []),
+      });
+    }
+  });
+
+  $effect(() => {
     const next = value;
     if (view && next !== view.state.doc.toString()) {
       view.dispatch({
@@ -175,4 +190,4 @@
   });
 </script>
 
-<div class="h-full overflow-hidden bg-editor [&_.cm-editor]:h-full" bind:this={host}></div>
+<div class="h-full overflow-hidden bg-editor [&_.cm-editor]:h-full {showLineNumbers ? '' : '[&_.cm-gutters]:hidden'}" bind:this={host}></div>

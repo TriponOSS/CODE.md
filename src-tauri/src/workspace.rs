@@ -317,6 +317,45 @@ pub fn save_file(
     atomic_write(&resolved, content.as_bytes())
 }
 
+fn validate_entry_name(name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("name is empty".to_string());
+    }
+    if name == "." || name == ".." {
+        return Err("that name is reserved".to_string());
+    }
+    if name.contains('/') || name.contains('\\') || name.contains('\0') {
+        return Err("name cannot contain path separators".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn create_entry(
+    state: State<'_, WorkspaceState>,
+    name: String,
+    directory: bool,
+) -> Result<String, String> {
+    let root = current_root(&state)?;
+    let name = name.trim();
+    validate_entry_name(name)?;
+    let path = root.join(name);
+    if path.exists() {
+        return Err(format!("{name} already exists"));
+    }
+    if directory {
+        fs::create_dir(&path).map_err(|e| format!("cannot create folder: {e}"))?;
+    } else {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|e| format!("cannot create file: {e}"))?;
+    }
+    Ok(relative_slash(&root, &path))
+}
+
 #[tauri::command]
 pub fn search_workspace(
     state: State<'_, WorkspaceState>,
@@ -443,6 +482,16 @@ mod tests {
         assert!(resolve_in_root(&root, "../escape.md").is_err());
         assert!(resolve_in_root(&root, "/etc/passwd").is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn entry_names_reject_traversal_and_separators() {
+        assert!(validate_entry_name("note.md").is_ok());
+        assert!(validate_entry_name("ideas").is_ok());
+        assert!(validate_entry_name("").is_err());
+        assert!(validate_entry_name("..").is_err());
+        assert!(validate_entry_name("docs/note.md").is_err());
+        assert!(validate_entry_name("docs\\note.md").is_err());
     }
 
     #[test]

@@ -204,7 +204,7 @@ input:focus-visible {
 /* Markdown preview typography, shared by the preview pane. */
 .prose {
   color: var(--text-dim);
-  font-size: 14px;
+  font-size: var(--preview-font-size, 14px);
   line-height: 1.72;
   max-width: 72ch;
 }
@@ -356,11 +356,19 @@ input:focus-visible {
   }
 }
 
+:root[data-motion="reduced"] *,
+:root[data-motion="reduced"] *::before,
+:root[data-motion="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
+}
+
 .sidebar-aurora {
   background:
     radial-gradient(110% 85% at 50% -18%, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.05) 44%, transparent 72%),
     radial-gradient(70% 70% at 6% -12%, rgba(255, 255, 255, 0.11), transparent 72%),
     radial-gradient(70% 70% at 94% -12%, rgba(255, 255, 255, 0.13), transparent 72%);
+  pointer-events: none;
 }
 
 :root[data-theme="light"] .sidebar-aurora {

@@ -18,6 +18,7 @@ pub fn run() {
             workspace::scan_tree,
             workspace::read_file,
             workspace::save_file,
+            workspace::create_entry,
             workspace::search_workspace,
             skills::scan_skills,
             git::git_status,
@@ -26,6 +27,7 @@ pub fn run() {
             git::git_stage,
             git::git_unstage,
             git::git_commit,
+            git::git_push,
             git::git_log,
         ])
         .run(tauri::generate_context!())

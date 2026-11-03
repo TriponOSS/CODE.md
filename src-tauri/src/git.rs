@@ -26,6 +26,7 @@ pub struct GitStatus {
     pub detached: bool,
     pub ahead: usize,
     pub behind: usize,
+    pub has_remote: bool,
     pub clean: bool,
     pub files: Vec<GitFile>,
 }
@@ -187,6 +188,9 @@ pub fn git_status(state: State<'_, WorkspaceState>) -> Result<Option<GitStatus>,
         };
     }
 
+    let remotes = run_git(&repo, &["remote"])?;
+    let has_remote = remotes.status.success() && !output_text(&remotes).is_empty();
+
     let mut ahead = 0;
     let mut behind = 0;
     let counts = run_git(
@@ -208,6 +212,7 @@ pub fn git_status(state: State<'_, WorkspaceState>) -> Result<Option<GitStatus>,
         detached,
         ahead,
         behind,
+        has_remote,
         clean: files.is_empty(),
         files,
     }))
@@ -292,6 +297,38 @@ pub fn git_commit(state: State<'_, WorkspaceState>, message: String) -> Result<S
     let hash = run_git(&repo, &["rev-parse", "--short", "HEAD"])?;
     ensure_ok(&hash, "rev-parse")?;
     Ok(output_text(&hash))
+}
+
+#[tauri::command]
+pub fn git_push(state: State<'_, WorkspaceState>) -> Result<String, String> {
+    let repo = require_repo(&state)?;
+    let remotes = run_git(&repo, &["remote"])?;
+    ensure_ok(&remotes, "remote")?;
+    let remote = output_text(&remotes)
+        .lines()
+        .next()
+        .map(str::to_string)
+        .ok_or_else(|| "no git remote configured".to_string())?;
+
+    let output = run_git(&repo, &["push"])?;
+    if output.status.success() {
+        let detail = error_text(&output);
+        return Ok(if detail.is_empty() {
+            "Pushed".to_string()
+        } else {
+            detail
+        });
+    }
+
+    let detail = error_text(&output);
+    let lower = detail.to_lowercase();
+    if lower.contains("no upstream") || lower.contains("set-upstream") {
+        let upstream = run_git(&repo, &["push", "-u", &remote, "HEAD"])?;
+        ensure_ok(&upstream, "push")?;
+        return Ok(format!("Pushed to {remote} and set upstream"));
+    }
+
+    Err(format!("git push failed: {detail}"))
 }
 
 #[tauri::command]

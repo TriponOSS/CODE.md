@@ -7,6 +7,7 @@
   import {
     closeWorkspace,
     commitFiles,
+    createEntry,
     getGitDiff,
     getGitLog,
     getGitStatus,
@@ -14,6 +15,7 @@
     isTauri,
     openWorkspace,
     pickWorkspace,
+    pushGit,
     readFile,
     saveFile,
     scanSkills,
@@ -25,6 +27,7 @@
   import { isMarkdownPath, isSkillPath } from "$lib/files";
   import { ancestorsOf } from "$lib/tree";
   import { documentStats, extractOutline } from "$lib/outline";
+  import { loadSettings, saveSettings, type AppSettings, type Theme } from "$lib/settings";
   import type { GitCommit, GitFile, GitStatus, SidebarView, SkillInfo, TreeEntry } from "$lib/types";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
   import DiffView from "$lib/components/DiffView.svelte";
@@ -39,8 +42,6 @@
   import SettingsView from "$lib/components/SettingsView.svelte";
   import SkillsView from "$lib/components/SkillsView.svelte";
   import type { PaletteCommand, PaletteFile } from "$lib/command";
-
-  type Theme = "dark" | "light" | "system";
 
   function storedTheme(): Theme {
     if (!browser) return "dark";
@@ -109,6 +110,52 @@
     persistPreviewRatio();
   }
 
+  const SIDEBAR_WIDTH_KEY = "codemd:sidebar-width";
+  const MIN_SIDEBAR_WIDTH = 240;
+  const MAX_SIDEBAR_WIDTH = 520;
+  const DEFAULT_SIDEBAR_WIDTH = 312;
+
+  function storedSidebarWidth(): number {
+    if (!browser) return DEFAULT_SIDEBAR_WIDTH;
+    const stored = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    if (!Number.isFinite(stored)) return DEFAULT_SIDEBAR_WIDTH;
+    return clampSidebarWidth(stored);
+  }
+
+  function clampSidebarWidth(value: number): number {
+    return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, value));
+  }
+
+  function persistSidebarWidth(): void {
+    if (browser) localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+  }
+
+  function startSidebarResize(event: PointerEvent): void {
+    event.preventDefault();
+    resizingSidebar = true;
+    sidebarResizeStartX = event.clientX;
+    sidebarResizeStartWidth = sidebarWidth;
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  }
+
+  function moveSidebarResize(event: PointerEvent): void {
+    if (!resizingSidebar) return;
+    sidebarWidth = clampSidebarWidth(sidebarResizeStartWidth + (event.clientX - sidebarResizeStartX));
+  }
+
+  function finishSidebarResize(event: PointerEvent): void {
+    if (!resizingSidebar) return;
+    resizingSidebar = false;
+    persistSidebarWidth();
+    const target = event.currentTarget as HTMLElement;
+    if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
+  }
+
+  function resetSidebarResize(): void {
+    sidebarWidth = DEFAULT_SIDEBAR_WIDTH;
+    persistSidebarWidth();
+  }
+
   let workspace = $state<string | null>(null);
   let tree = $state<TreeEntry[]>([]);
   let skills = $state<SkillInfo[]>([]);
@@ -126,6 +173,15 @@
   let splitEl = $state<HTMLDivElement>();
   let resizeStartX = 0;
   let resizeStartRatio = 0.5;
+  let sidebarWidth = $state(storedSidebarWidth());
+  let resizingSidebar = $state(false);
+  let sidebarResizeStartX = 0;
+  let sidebarResizeStartWidth = DEFAULT_SIDEBAR_WIDTH;
+  let settings = $state<AppSettings>(loadSettings());
+  let createMenu = $state(false);
+  let creating = $state<"file" | "folder" | null>(null);
+  let newName = $state("");
+  let creatingBusy = $state(false);
   let revealKey = $state(0);
   let refreshing = $state(false);
   let notice = $state<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -247,6 +303,22 @@
       run: () => closeActiveTab(),
     },
   ]);
+
+  function applyPreferences() {
+    if (!browser) return;
+    const root = document.documentElement;
+    root.style.setProperty("--editor-font-size", `${settings.editor.fontSize}px`);
+    root.style.setProperty("--editor-line-height", String(settings.editor.lineHeight));
+    root.style.setProperty("--editor-tab-size", String(settings.editor.tabSize));
+    root.style.setProperty("--preview-font-size", `${settings.preview.fontSize}px`);
+    root.dataset.motion = settings.appearance.reduceMotion ? "reduced" : "full";
+  }
+
+  function updateSettings(next: AppSettings) {
+    settings = next;
+    saveSettings(next);
+    applyPreferences();
+  }
 
   function applyTheme(next: Theme) {
     theme = next;
@@ -393,6 +465,23 @@
     }
   }
 
+  async function pushChanges(): Promise<boolean> {
+    gitBusy = true;
+    gitActionError = "";
+    try {
+      const result = await pushGit();
+      await refreshGit();
+      say("ok", result);
+      return true;
+    } catch (cause) {
+      gitActionError = errorText(cause);
+      say("err", gitActionError);
+      return false;
+    } finally {
+      gitBusy = false;
+    }
+  }
+
   async function initializeGit() {
     gitBusy = true;
     gitActionError = "";
@@ -485,6 +574,50 @@
     }
   }
 
+  function focusInput(node: HTMLInputElement) {
+    const frame = requestAnimationFrame(() => {
+      node.focus();
+      node.select();
+    });
+    return {
+      destroy() {
+        cancelAnimationFrame(frame);
+      },
+    };
+  }
+
+  function beginCreate(kind: "file" | "folder") {
+    if (!workspace) return;
+    createMenu = false;
+    creating = kind;
+    newName = kind === "file" ? "untitled.md" : "untitled";
+  }
+
+  function cancelCreate() {
+    creating = null;
+    newName = "";
+  }
+
+  async function submitCreate(event: SubmitEvent) {
+    event.preventDefault();
+    if (!workspace || !creating || creatingBusy) return;
+    const name = newName.trim();
+    if (name === "") return;
+    creatingBusy = true;
+    try {
+      const path = await createEntry(name, creating === "folder");
+      const kind = creating;
+      cancelCreate();
+      await refresh();
+      if (kind === "file") await openFile(path);
+      say("ok", `${kind === "folder" ? "Folder" : "File"} created`);
+    } catch (cause) {
+      say("err", errorText(cause));
+    } finally {
+      creatingBusy = false;
+    }
+  }
+
   function expandAncestors(path: string) {
     const ancestors = new Set(ancestorsOf(path));
     collapsed = new Set([...collapsed].filter((dir) => !ancestors.has(dir)));
@@ -527,7 +660,7 @@
       await saveFile(tab.path, tab.content);
       tab.original = tab.content;
       skills = await scanSkills();
-      await refreshGit();
+      if (settings.git.autoRefresh) await refreshGit();
       say("ok", `Saved ${tab.name}`);
     } catch (cause) {
       say("err", errorText(cause));
@@ -538,7 +671,11 @@
     const index = tabs.findIndex((tab) => tab.path === path);
     if (index === -1) return;
     const tab = tabs[index];
-    if (tab.content !== tab.original && !confirm(`Discard unsaved changes to ${tab.name}?`)) {
+    if (
+      tab.content !== tab.original &&
+      settings.general.confirmDiscard &&
+      !confirm(`Discard unsaved changes to ${tab.name}?`)
+    ) {
       return;
     }
     const next = tabs.filter((item) => item.path !== path);
@@ -563,6 +700,7 @@
 
   function handleWindowClick(event: MouseEvent) {
     const target = event.target;
+    if (!(target instanceof Element && target.closest("[data-create-root]"))) createMenu = false;
     if (target instanceof Element && target.closest("[data-menu-root]")) return;
     menu = null;
   }
@@ -570,6 +708,8 @@
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === "Escape") {
       menu = null;
+      createMenu = false;
+      if (creating) cancelCreate();
       paletteOpen = false;
       return;
     }
@@ -610,6 +750,7 @@
 
   onMount(() => {
     applyTheme(theme);
+    applyPreferences();
     let unlisten: UnlistenFn | undefined;
     const narrow = window.matchMedia("(max-width: 900px)");
     const syncSidebar = () => {
@@ -657,7 +798,7 @@
 
 <svelte:window onkeydown={handleKeydown} onclick={handleWindowClick} />
 
-<div class="app flex h-screen flex-col bg-app" class:select-none={resizingPreview}>
+  <div class="app flex h-screen flex-col bg-app" class:select-none={resizingPreview || resizingSidebar}>
   <header class="flex h-9 shrink-0 items-center border-b border-line bg-panel" data-tauri-drag-region>
     <div class="flex w-[148px] shrink-0 select-none items-center gap-2 pl-4" data-tauri-drag-region>
       <img class="size-[22px] rounded-[5px]" src="/code-md-mark.svg" alt="" aria-hidden="true" />
@@ -670,6 +811,10 @@
         {#if menu === "file"}
           <div class="absolute top-full left-0 z-30 mt-1 w-60 rounded-lg border border-line bg-elev p-1 shadow-[0_16px_40px_rgba(0,0,0,.55)]">
             <button class="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink" type="button" onclick={() => { menu = null; void openFolder(); }}><Icon name="folder" size={14} />Open folder<span class="ml-auto font-mono text-[10px] text-faint">Ctrl O</span></button>
+            <div class="my-1 h-px bg-line"></div>
+            <button class="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink disabled:opacity-40" type="button" disabled={!workspace} onclick={() => { menu = null; sidebarOpen = true; sidebarView = "files"; beginCreate("file"); }}><Icon name="file" size={14} />New file</button>
+            <button class="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink disabled:opacity-40" type="button" disabled={!workspace} onclick={() => { menu = null; sidebarOpen = true; sidebarView = "files"; beginCreate("folder"); }}><Icon name="folder" size={14} />New folder</button>
+            <div class="my-1 h-px bg-line"></div>
             <button class="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink disabled:opacity-40" type="button" disabled={!dirty} onclick={() => { menu = null; void save(); }}><Icon name="save" size={14} />Save<span class="ml-auto font-mono text-[10px] text-faint">Ctrl S</span></button>
             <button class="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-xs text-muted hover:bg-hover hover:text-ink disabled:opacity-40" type="button" disabled={!activeTab} onclick={() => { menu = null; closeActiveTab(); }}><Icon name="close" size={14} />Close tab<span class="ml-auto font-mono text-[10px] text-faint">Ctrl W</span></button>
             <div class="my-1 h-px bg-line"></div>
@@ -767,7 +912,7 @@
 
   <div class="flex min-h-0 flex-1">
     {#if sidebarOpen && sidebarView !== "settings"}
-      <div class="m-2 mr-0 flex w-[312px] shrink-0 flex-col">
+      <div class="m-2 mr-0 flex shrink-0 flex-col" style="width: {sidebarWidth}px">
         <nav class="mb-2 flex h-9 shrink-0 items-center gap-0.5 bg-transparent px-1" aria-label="Sidebar views">
           <button
             class="grid size-8 place-items-center rounded-md transition-colors duration-100 {sidebarView === 'files' ? 'bg-active text-ink' : 'text-faint hover:bg-elev hover:text-ink'}"
@@ -847,36 +992,68 @@
 
         <div class="sidebar-surface group/sidebar relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border-[1.3px] border-line bg-app shadow-[0_18px_50px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.07)]">
           <div class="sidebar-aurora pointer-events-none absolute inset-x-0 top-0 h-40"></div>
-          <div class="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-ink/25 to-transparent"></div>
-
           <aside class="relative z-10 flex min-w-0 flex-1 flex-col bg-transparent">
-          <div class="flex h-10 shrink-0 items-center gap-2 border-b border-line pr-2 pl-3">
-            <span class="text-xs font-semibold text-ink">
+          <div class="flex h-8 shrink-0 items-center gap-1.5 border-b border-line pr-1.5 pl-2.5">
+            <span class="text-[11px] font-semibold text-ink">
               {#if sidebarView === "files"}Project{:else if sidebarView === "outline"}Outline{:else if sidebarView === "skills"}Skill audit{:else if sidebarView === "git"}Source control{:else}Search{/if}
             </span>
             {#if sidebarView === "files" && workspace}
-              <span class="text-[11px] tabular-nums text-faint">{tree.filter((entry) => !entry.isDir).length}</span>
+              <span class="text-[10px] tabular-nums text-faint">{tree.filter((entry) => !entry.isDir).length}</span>
             {/if}
             {#if sidebarView === "git" && git}
-              <span class="text-[11px] tabular-nums text-faint">{git.branch}</span>
+              <span class="text-[10px] tabular-nums text-faint">{git.branch}</span>
             {/if}
             {#if sidebarView === "skills" && invalidSkills > 0}
-              <span class="text-[11px] font-medium tabular-nums text-danger" title="{invalidSkills} skills need fixes">{invalidSkills}</span>
+              <span class="text-[10px] font-medium tabular-nums text-danger" title="{invalidSkills} skills need fixes">{invalidSkills}</span>
             {/if}
             {#if refreshing}
-              <span class="text-[10px] text-faint">scanning</span>
+              <span class="text-[9px] text-faint">scanning</span>
             {/if}
             <div class="ml-auto flex items-center gap-0.5">
-              <button class="grid size-6 place-items-center rounded-md text-faint transition-colors duration-100 enabled:hover:bg-hover enabled:hover:text-ink disabled:opacity-40" type="button" title="Rescan folder" aria-label="Rescan folder" disabled={!workspace || refreshing} onclick={() => void refresh()}>
-                <Icon name="refresh" size={13} />
+              <div class="relative" data-create-root>
+                <button class="grid size-5 place-items-center rounded-md text-faint transition-colors duration-100 enabled:hover:bg-hover enabled:hover:text-ink disabled:opacity-35" type="button" title="New file or folder" aria-label="New file or folder" aria-expanded={createMenu} disabled={!workspace} onclick={() => (createMenu = !createMenu)}>
+                  <Icon name="add" size={13} />
+                </button>
+                {#if createMenu}
+                  <div class="absolute top-full right-0 z-30 mt-1 w-36 rounded-lg border border-line bg-elev p-1 shadow-[0_16px_40px_rgba(0,0,0,.55)]">
+                    <button class="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-muted hover:bg-hover hover:text-ink" type="button" onclick={() => beginCreate("file")}><Icon name="file" size={12} />New file</button>
+                    <button class="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-muted hover:bg-hover hover:text-ink" type="button" onclick={() => beginCreate("folder")}><Icon name="folder" size={12} />New folder</button>
+                  </div>
+                {/if}
+              </div>
+              <button class="grid size-5 place-items-center rounded-md text-faint transition-colors duration-100 enabled:hover:bg-hover enabled:hover:text-ink disabled:opacity-35" type="button" title="Rescan folder" aria-label="Rescan folder" disabled={!workspace || refreshing} onclick={() => void refresh()}>
+                <Icon name="refresh" size={12} />
               </button>
-              <button class="grid size-6 place-items-center rounded-md text-faint transition-colors duration-100 hover:bg-hover hover:text-ink" type="button" title="Hide sidebar (Ctrl B)" aria-label="Hide sidebar" onclick={() => (sidebarOpen = false)}>
-                <Icon name="sidebar" size={14} />
+              <button class="grid size-5 place-items-center rounded-md text-faint transition-colors duration-100 hover:bg-hover hover:text-ink" type="button" title="Hide sidebar (Ctrl B)" aria-label="Hide sidebar" onclick={() => (sidebarOpen = false)}>
+                <Icon name="sidebar" size={13} />
               </button>
             </div>
           </div>
 
-          <div class="min-h-0 flex-1 overflow-auto py-1">
+          <div class="min-h-0 flex-1 {sidebarView === 'git' ? 'flex flex-col overflow-hidden' : 'overflow-auto py-1'}">
+            {#if creating && workspace}
+              <form class="mx-2 mt-1 mb-2 flex items-center gap-1.5 rounded-md border border-line bg-elev py-1 pr-1 pl-2" onsubmit={submitCreate}>
+                <Icon name={creating === "file" ? "file" : "folder"} size={13} />
+                <input
+                  class="h-6 min-w-0 flex-1 border-0 bg-transparent text-[11.5px] text-ink outline-none placeholder:text-faint"
+                  placeholder={creating === "file" ? "File name" : "Folder name"}
+                  aria-label={creating === "file" ? "New file name" : "New folder name"}
+                  bind:value={newName}
+                  use:focusInput
+                  spellcheck="false"
+                  onkeydown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      cancelCreate();
+                    }
+                  }}
+                />
+                <button class="inline-flex h-6 shrink-0 items-center rounded px-1.5 text-[10px] font-semibold text-muted hover:bg-hover hover:text-ink disabled:opacity-40" type="submit" disabled={creatingBusy || newName.trim() === ""}>Create</button>
+                <button class="grid size-5 shrink-0 place-items-center rounded text-faint hover:bg-hover hover:text-ink" type="button" title="Cancel" aria-label="Cancel" onclick={cancelCreate}>
+                  <Icon name="close" size={11} />
+                </button>
+              </form>
+            {/if}
             {#if !workspace}
               <div class="px-3.5 py-4">
                 <p class="m-0 text-xs leading-relaxed text-faint">No folder open.</p>
@@ -912,6 +1089,7 @@
                 onStage={(paths) => void stageSelected(paths)}
                 onUnstage={(paths) => void unstageSelected(paths)}
                 onCommit={commitStaged}
+                onPush={pushChanges}
               />
             {:else}
               <SearchView onOpen={(path, line) => void openFile(path, line)} />
@@ -919,6 +1097,38 @@
           </div>
           </aside>
         </div>
+      </div>
+      <div
+        class="group relative z-10 -ml-px w-[5px] shrink-0 cursor-col-resize bg-transparent max-[900px]:hidden"
+        role="slider"
+        tabindex="0"
+        aria-label="Sidebar width"
+        aria-orientation="vertical"
+        aria-valuemin={MIN_SIDEBAR_WIDTH}
+        aria-valuemax={MAX_SIDEBAR_WIDTH}
+        aria-valuenow={Math.round(sidebarWidth)}
+        title="Drag to resize sidebar, double-click to reset"
+        onpointerdown={startSidebarResize}
+        onpointermove={moveSidebarResize}
+        onpointerup={finishSidebarResize}
+        onpointercancel={finishSidebarResize}
+        ondblclick={resetSidebarResize}
+        onkeydown={(event) => {
+          if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            sidebarWidth = clampSidebarWidth(sidebarWidth - 12);
+            persistSidebarWidth();
+          } else if (event.key === "ArrowRight") {
+            event.preventDefault();
+            sidebarWidth = clampSidebarWidth(sidebarWidth + 12);
+            persistSidebarWidth();
+          } else if (event.key === "Home") {
+            event.preventDefault();
+            resetSidebarResize();
+          }
+        }}
+      >
+        <span class="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors duration-100 group-hover:bg-line-strong group-focus-visible:bg-ink {resizingSidebar ? 'bg-ink' : ''}"></span>
       </div>
     {:else}
       <nav class="flex w-12 shrink-0 flex-col items-center gap-0.5 bg-transparent py-2" aria-label="Sidebar views">
@@ -1020,14 +1230,19 @@
         <div class="min-h-0 flex-1 overflow-hidden">
           <SettingsView
             {theme}
+            {settings}
             {workspace}
             {workspaceName}
             fileCount={tree.filter((entry) => !entry.isDir).length}
             skillCount={skills.length}
             {refreshing}
             onTheme={applyTheme}
+            onSettings={updateSettings}
             onRescan={() => void refresh()}
+            onOpenFolder={() => void openFolder()}
             onForget={() => void forgetWorkspace()}
+            onResetPreview={resetPreviewResize}
+            onClose={() => (sidebarView = "files")}
           />
         </div>
       {:else}
@@ -1075,6 +1290,8 @@
                   value={activeTab.content}
                   revealLine={activeTab.revealLine}
                   {revealKey}
+                  wordWrap={settings.editor.wordWrap}
+                  showLineNumbers={settings.editor.lineNumbers}
                   onChange={(value) => updateContent(activeTab.path, value)}
                   onSave={save}
                 />
@@ -1171,7 +1388,7 @@
     {#if workspace}
       <span>{tree.filter((entry) => !entry.isDir).length} files</span>
       <span>{skills.length} {skills.length === 1 ? "skill" : "skills"}{#if invalidSkills > 0}<span class="text-danger"> · {invalidSkills} {invalidSkills === 1 ? "issue" : "issues"}</span>{/if}</span>
-      {#if git}
+      {#if git && settings.git.showInStatusBar}
         <button class="flex shrink-0 items-center gap-1 rounded px-1 text-faint transition-colors duration-100 hover:bg-elev hover:text-ink" type="button" title="Show source control" onclick={() => { sidebarView = "git"; sidebarOpen = true; }}>
           <Icon name="git" size={12} />{git.branch}
         </button>
