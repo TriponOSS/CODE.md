@@ -29,13 +29,10 @@
   import { documentStats, extractOutline } from "$lib/outline";
   import {
     loadSettings,
-    loadCustomThemes,
     saveSettings,
-    saveCustomThemes,
     type AppSettings,
     type ColorTheme,
     type Theme,
-    type ThemeDefinition,
   } from "$lib/settings";
   import type {
     GitCommit,
@@ -68,11 +65,12 @@
   }
 
   function storedColorTheme(): ColorTheme {
-    if (!browser) return "t3-code";
+    if (!browser) return "default";
     const value = localStorage.getItem("codemd:color-theme");
-    return value === "t3-chat" || value === "grove" || value === "ocean" || value === "ember" || value === "iris" || value === "t3-code"
-      ? value
-      : value?.startsWith("custom:") ? value as ColorTheme : "t3-code";
+    localStorage.removeItem("codemd:custom-themes");
+    if (value === "default" || value === "cherry" || value === "groove") return value;
+    localStorage.setItem("codemd:color-theme", "default");
+    return "default";
   }
 
   type Tab = {
@@ -196,7 +194,6 @@
   let sidebarView = $state<SidebarView>("files");
   let theme = $state<Theme>(storedTheme());
   let colorTheme = $state<ColorTheme>(storedColorTheme());
-  let customThemes = $state<ThemeDefinition[]>(loadCustomThemes());
   let menu = $state<"file" | "view" | "go" | null>(null);
   let paletteOpen = $state(false);
   let sidebarOpen = $state(true);
@@ -396,48 +393,6 @@
     if (!browser) return;
     localStorage.setItem("codemd:color-theme", next);
     document.documentElement.dataset.palette = next;
-    const root = document.documentElement;
-    const custom = next.startsWith("custom:")
-      ? customThemes.find((item) => `custom:${item.id}` === next)
-      : undefined;
-    const dark = root.dataset.theme === "dark";
-    const colors = custom ? (dark ? custom.variants?.dark ?? custom.colors : custom.colors) : undefined;
-    const tokenMap: Record<string, string> = {
-      canvas: "--bg",
-      chrome: "--bg-rail",
-      sidebar: "--bg-panel",
-      surface: "--bg-editor",
-      surfaceRaised: "--bg-elev",
-      surfaceOverlay: "--bg-hover",
-      sidebarRowActive: "--bg-active",
-      border: "--line",
-      input: "--line-strong",
-      text: "--text",
-      textMuted: "--text-dim",
-      secondaryLabel: "--text-faint",
-      accent: "--accent",
-      accentForeground: "--accent-ink",
-      error: "--err",
-      warning: "--ok",
-      terminalSelection: "--selection",
-      codeForeground: "--syntax-strong",
-    };
-    for (const property of Object.values(tokenMap)) root.style.removeProperty(property);
-    if (colors) {
-      for (const [key, property] of Object.entries(tokenMap)) {
-        const value = colors[key];
-        if (value) root.style.setProperty(property, value);
-      }
-    }
-    if (!custom) return;
-    root.style.setProperty("--accent-strong", colors?.accent ?? "#b7a0f4");
-    root.style.setProperty("--ok", colors?.warning ?? "#8dbb9a");
-  }
-
-  function updateCustomThemes(next: ThemeDefinition[]) {
-    customThemes = next;
-    saveCustomThemes(next);
-    if (colorTheme.startsWith("custom:")) applyColorTheme(colorTheme);
   }
 
   async function forgetWorkspace() {
@@ -1842,7 +1797,6 @@
           <SettingsView
             {theme}
             {colorTheme}
-            {customThemes}
             {settings}
             {workspace}
             {workspaceName}
@@ -1850,7 +1804,6 @@
             skillCount={skills.length}
             onTheme={applyTheme}
             onColorTheme={applyColorTheme}
-            onCustomThemes={updateCustomThemes}
             onSettings={updateSettings}
             onRefresh={() => void refresh()}
             onOpenFolder={() => void openFolder()}

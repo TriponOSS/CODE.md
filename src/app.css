@@ -15,6 +15,7 @@
   --color-accent: var(--accent);
   --color-accent-strong: var(--accent-strong);
   --color-accent-ink: var(--accent-ink);
+  --color-secondary: var(--secondary);
   --color-ok: var(--ok);
   --color-danger: var(--err);
   --font-sans: "Manrope Variable", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
@@ -28,29 +29,38 @@
 
 :root {
   color-scheme: dark;
-  --bg: #0a0a0a;
-  --bg-rail: #0a0a0a;
-  --bg-panel: #111111;
-  --bg-editor: #0d0d0d;
-  --bg-elev: #191919;
-  --bg-hover: #222222;
-  --bg-active: #2a2a2a;
-  --line: #242424;
-  --line-strong: #363636;
-  --text: #f4f4f4;
-  --text-dim: #a8a8a8;
-  --text-faint: #757575;
-  --accent: #ededed;
-  --accent-strong: #ffffff;
-  --accent-ink: #0b0b0b;
-  --ok: #c7c7c7;
+  --palette-bg: #0a0a0a;
+  --palette-panel: #111111;
+  --palette-editor: #0d0d0d;
+  --palette-elev: #191919;
+  --palette-line: #242424;
+  --palette-text: #f4f4f4;
+  --palette-accent: #ededed;
+  --palette-secondary: #8d8a82;
+  --bg: var(--palette-bg);
+  --bg-rail: var(--palette-bg);
+  --bg-panel: var(--palette-panel);
+  --bg-editor: var(--palette-editor);
+  --bg-elev: var(--palette-elev);
+  --bg-hover: color-mix(in srgb, var(--palette-elev) 72%, var(--palette-text));
+  --bg-active: color-mix(in srgb, var(--palette-elev) 52%, var(--palette-secondary));
+  --line: var(--palette-line);
+  --line-strong: color-mix(in srgb, var(--palette-line) 65%, var(--palette-text));
+  --text: var(--palette-text);
+  --text-dim: color-mix(in srgb, var(--palette-text) 68%, var(--palette-bg));
+  --text-faint: color-mix(in srgb, var(--palette-text) 48%, var(--palette-bg));
+  --accent: var(--palette-accent);
+  --accent-strong: color-mix(in srgb, var(--palette-accent) 72%, var(--palette-text));
+  --accent-ink: var(--palette-bg);
+  --secondary: var(--palette-secondary);
+  --ok: var(--palette-secondary);
   --err: #e06c6c;
-  --selection: #303030;
-  --active-line: #161616;
-  --syntax-strong: #f5f5f5;
-  --syntax-dim: #bdbdbd;
-  --syntax-faint: #7a7a7a;
-  --syntax-link: #d6d6d6;
+  --selection: color-mix(in srgb, var(--palette-secondary) 45%, var(--palette-bg));
+  --active-line: var(--palette-elev);
+  --syntax-strong: var(--palette-text);
+  --syntax-dim: var(--text-dim);
+  --syntax-faint: var(--text-faint);
+  --syntax-link: var(--accent-strong);
   --font-ui: "Manrope Variable", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", "Cascadia Code", "SFMono-Regular", Menlo, monospace;
   --rail-w: 56px;
@@ -62,71 +72,59 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f3f3f3;
-  --bg-rail: #f3f3f3;
-  --bg-panel: #ffffff;
-  --bg-editor: #fafafa;
-  --bg-elev: #efefef;
-  --bg-hover: #e7e7e7;
-  --bg-active: #dedede;
-  --line: #e2e2e2;
-  --line-strong: #c9c9c9;
-  --text: #111111;
-  --text-dim: #525252;
-  --text-faint: #707070;
-  --accent: #171717;
-  --accent-strong: #000000;
-  --accent-ink: #ffffff;
-  --ok: #525252;
+  --palette-bg: #f3f3f3;
+  --palette-panel: #ffffff;
+  --palette-editor: #fafafa;
+  --palette-elev: #efefef;
+  --palette-line: #e2e2e2;
+  --palette-text: #111111;
+  --palette-accent: #171717;
+  --palette-secondary: #77736b;
   --err: #b42318;
-  --selection: #c9c9c9;
-  --active-line: #f0f0f0;
-  --syntax-strong: #111111;
-  --syntax-dim: #404040;
-  --syntax-faint: #737373;
-  --syntax-link: #262626;
 }
 
-:root[data-palette="t3-code"] {
-  --accent: #9673eb;
-  --accent-strong: #cabbff;
-  --accent-ink: #171126;
-  --ok: #8dbb9a;
+:root[data-palette="cherry"][data-theme="light"] {
+  --palette-bg: #fff6f7;
+  --palette-panel: #fffafb;
+  --palette-editor: #fff7f8;
+  --palette-elev: #fce8ec;
+  --palette-line: #edcbd3;
+  --palette-text: #37232b;
+  --palette-accent: #bd3458;
+  --palette-secondary: #e1a0af;
 }
 
-:root[data-palette="t3-chat"] {
-  --accent: #d9558c;
-  --accent-strong: #ff91ba;
-  --accent-ink: #24121b;
-  --ok: #8dbb9a;
+:root[data-palette="cherry"][data-theme="dark"] {
+  --palette-bg: #1b1115;
+  --palette-panel: #26171d;
+  --palette-editor: #201319;
+  --palette-elev: #321d25;
+  --palette-line: #4a2d37;
+  --palette-text: #f7eaf0;
+  --palette-accent: #f06b8a;
+  --palette-secondary: #d7a0ad;
 }
 
-:root[data-palette="grove"] {
-  --accent: #39895f;
-  --accent-strong: #9adbb0;
-  --accent-ink: #102117;
-  --ok: #91c7a6;
+:root[data-palette="groove"][data-theme="light"] {
+  --palette-bg: #f6f3ed;
+  --palette-panel: #fbf9f4;
+  --palette-editor: #f8f6f1;
+  --palette-elev: #eeeae1;
+  --palette-line: #ded8cb;
+  --palette-text: #292721;
+  --palette-accent: #b95e3f;
+  --palette-secondary: #a08a6b;
 }
 
-:root[data-palette="ocean"] {
-  --accent: #3188bf;
-  --accent-strong: #91cef2;
-  --accent-ink: #10202b;
-  --ok: #8dbb9a;
-}
-
-:root[data-palette="ember"] {
-  --accent: #d45e42;
-  --accent-strong: #f6a087;
-  --accent-ink: #28150f;
-  --ok: #9ab88c;
-}
-
-:root[data-palette="iris"] {
-  --accent: #8a63dc;
-  --accent-strong: #c9adff;
-  --accent-ink: #1c1429;
-  --ok: #8dbb9a;
+:root[data-palette="groove"][data-theme="dark"] {
+  --palette-bg: #1c1b19;
+  --palette-panel: #242320;
+  --palette-editor: #201f1d;
+  --palette-elev: #2d2b27;
+  --palette-line: #413d35;
+  --palette-text: #f2eee6;
+  --palette-accent: #d97757;
+  --palette-secondary: #c8a58d;
 }
 
 * {

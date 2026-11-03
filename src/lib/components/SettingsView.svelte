@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { parseThemeDefinition, type AppSettings, type ColorTheme, type Theme, type ThemeDefinition } from "$lib/settings";
+  import type { AppSettings, ColorTheme, Theme } from "$lib/settings";
   import Icon from "./Icon.svelte";
   import Toggle from "./Toggle.svelte";
 
@@ -16,7 +16,6 @@
   let {
     theme,
     colorTheme,
-    customThemes,
     settings,
     workspace,
     workspaceName,
@@ -24,7 +23,6 @@
     skillCount,
     onTheme,
     onColorTheme,
-    onCustomThemes,
     onSettings,
     onRefresh,
     onOpenFolder,
@@ -34,7 +32,6 @@
   }: {
     theme: Theme;
     colorTheme: ColorTheme;
-    customThemes: ThemeDefinition[];
     settings: AppSettings;
     workspace: string | null;
     workspaceName: string;
@@ -42,7 +39,6 @@
     skillCount: number;
     onTheme: (theme: Theme) => void;
     onColorTheme: (theme: ColorTheme) => void;
-    onCustomThemes: (themes: ThemeDefinition[]) => void;
     onSettings: (settings: AppSettings) => void;
     onRefresh: () => void;
     onOpenFolder: () => void;
@@ -73,13 +69,10 @@
     { value: "dark", label: "Dark", icon: "moon" },
   ];
 
-  const colorThemes: { value: ColorTheme; label: string; primary: string; secondary: string }[] = [
-    { value: "t3-code", label: "T3 Code", primary: "#dfd2ff", secondary: "#7453d1" },
-    { value: "t3-chat", label: "T3 Chat", primary: "#ff91ba", secondary: "#b52f68" },
-    { value: "grove", label: "Grove", primary: "#9adbb0", secondary: "#277d50" },
-    { value: "ocean", label: "Ocean", primary: "#91cef2", secondary: "#2479b3" },
-    { value: "ember", label: "Ember", primary: "#f6a087", secondary: "#c84c31" },
-    { value: "iris", label: "Iris", primary: "#c9adff", secondary: "#7047cf" },
+  const colorThemes: { value: ColorTheme; label: string; primary: string; secondary: string; gradient?: string }[] = [
+    { value: "default", label: "Default", primary: "#ededed", secondary: "#8d8a82" },
+    { value: "cherry", label: "Cherry", primary: "#f06b8a", secondary: "#e1a0af", gradient: "linear-gradient(125deg, #cf3e60, #f47d91 58%, #ffc17a)" },
+    { value: "groove", label: "Groove", primary: "#d97757", secondary: "#c8a58d" },
   ];
 
   const stack = [
@@ -100,112 +93,6 @@
 
   let active = $state<CategoryId>("general");
   let query = $state("");
-  let importError = $state("");
-  let copiedTheme = $state<ColorTheme | null>(null);
-  let importInput = $state<HTMLInputElement>();
-
-  const allColorThemes = $derived([
-    ...colorThemes,
-    ...customThemes.map((item) => ({
-      value: `custom:${item.id}` as ColorTheme,
-      label: item.name,
-      primary: item.colors.secondary ?? item.colors.accentForeground ?? item.colors.accent,
-      secondary: item.colors.accent,
-    })),
-  ]);
-
-  async function importTheme(event: Event) {
-    const input = event.currentTarget as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file) return;
-    try {
-      const imported = parseThemeDefinition(JSON.parse(await file.text()));
-      const id = `custom:${imported.id}` as ColorTheme;
-      const next = [...customThemes.filter((item) => item.id !== imported.id), imported];
-      onCustomThemes(next);
-      onColorTheme(id);
-      importError = "";
-    } catch (error) {
-      importError = error instanceof Error ? error.message : "Unable to import this theme.";
-    } finally {
-      input.value = "";
-    }
-  }
-
-  async function copyTheme(option: (typeof allColorThemes)[number]) {
-    const storedTheme = option.value.startsWith("custom:")
-      ? customThemes.find((item) => `custom:${item.id}` === option.value)
-      : undefined;
-    const accent = option.secondary;
-    const lightColors: Record<string, string> = {
-      canvas: "#f3f3f3", chrome: "#f3f3f3", toolbar: "#f3f3f3", toolbarForeground: "#111111",
-      toolbarBorder: "#e2e2e2", toolbarControl: "#efefef", toolbarControlForeground: "#111111",
-      toolbarControlHover: "#e7e7e7", surface: "#fafafa", surfaceRaised: "#efefef",
-      surfaceOverlay: "#e7e7e7", text: "#111111", textMuted: "#525252", border: "#e2e2e2",
-      input: "#c9c9c9", focus: accent, accent, accentForeground: "#ffffff", secondary: "#efefef",
-      secondaryForeground: "#111111", muted: "#efefef", mutedForeground: "#525252",
-      placeholder: "#707070", secondaryLabel: "#707070", iconMuted: "#707070", error: "#b42318",
-      errorForeground: "#b42318", errorSurface: "#fce8e6", warning: "#a07800",
-      warningForeground: "#735700", warningSurface: "#fff4cc", update: accent,
-      updateForeground: "#525252", updateSurface: "#efefef", accentSurface: "#efefef",
-      accentSurfaceForeground: "#111111", messageSurface: "#fafafa", messageForeground: "#111111",
-      messageAction: accent, messageActionForeground: "#ffffff", messageActionHover: accent,
-      codeBackground: "#fafafa", codeForeground: "#111111", sidebar: "#ffffff",
-      sidebarForeground: "#111111", sidebarMutedForeground: "#525252",
-      sidebarControlSurface: "#efefef", sidebarRowHover: "#e7e7e7", sidebarRowActive: "#dedede",
-      sidebarRowSelected: "#dedede", sidebarBorder: "#e2e2e2", terminalBackground: "#fafafa",
-      terminalForeground: "#111111", terminalCursor: accent, terminalSelection: "#c9c9c9",
-      terminalScrollbar: "#c9c9c9", terminalScrollbarHover: "#707070",
-    };
-    const darkColors: Record<string, string> = {
-      canvas: "#0a0a0a", chrome: "#0a0a0a", toolbar: "#0a0a0a", toolbarForeground: "#f4f4f4",
-      toolbarBorder: "#242424", toolbarControl: "#191919", toolbarControlForeground: "#f4f4f4",
-      toolbarControlHover: "#222222", surface: "#0d0d0d", surfaceRaised: "#191919",
-      surfaceOverlay: "#222222", text: "#f4f4f4", textMuted: "#a8a8a8", border: "#242424",
-      input: "#363636", focus: option.primary, accent: option.primary, accentForeground: "#171717",
-      secondary: "#191919", secondaryForeground: "#f4f4f4", muted: "#191919",
-      mutedForeground: "#a8a8a8", placeholder: "#757575", secondaryLabel: "#757575",
-      iconMuted: "#a8a8a8", error: "#e06c6c", errorForeground: "#e06c6c",
-      errorSurface: "#3a2020", warning: "#c7ae68", warningForeground: "#d8c78b",
-      warningSurface: "#38311d", update: option.primary, updateForeground: "#a8a8a8",
-      updateSurface: "#191919", accentSurface: "#191919", accentSurfaceForeground: "#f4f4f4",
-      messageSurface: "#111111", messageForeground: "#f4f4f4", messageAction: option.primary,
-      messageActionForeground: "#171717", messageActionHover: option.secondary,
-      codeBackground: "#0d0d0d", codeForeground: "#f4f4f4", sidebar: "#111111",
-      sidebarForeground: "#f4f4f4", sidebarMutedForeground: "#a8a8a8",
-      sidebarControlSurface: "#191919", sidebarRowHover: "#222222", sidebarRowActive: "#2a2a2a",
-      sidebarRowSelected: "#2a2a2a", sidebarBorder: "#242424", terminalBackground: "#0d0d0d",
-      terminalForeground: "#f4f4f4", terminalCursor: option.primary, terminalSelection: "#303030",
-      terminalScrollbar: "#363636", terminalScrollbarHover: "#757575",
-    };
-    const definition = storedTheme ?? {
-      version: 1 as const,
-      id: option.value,
-      name: option.label,
-      appearance: "light" as const,
-      description: `${option.label} color theme for CODE.MD.`,
-      colors: lightColors,
-      variants: { dark: darkColors },
-    };
-    const contents = JSON.stringify(definition, null, 2);
-    try {
-      await navigator.clipboard.writeText(contents);
-    } catch {
-      const field = document.createElement("textarea");
-      field.value = contents;
-      field.style.position = "fixed";
-      field.style.opacity = "0";
-      document.body.append(field);
-      field.select();
-      document.execCommand("copy");
-      field.remove();
-    }
-    copiedTheme = option.value;
-    setTimeout(() => {
-      if (copiedTheme === option.value) copiedTheme = null;
-    }, 1400);
-  }
-
   const normalized = $derived(query.trim().toLowerCase());
   const visibleCategories = $derived(
     normalized === ""
@@ -371,36 +258,22 @@
                   <p id="themes-heading" class="m-0 text-[13px] font-medium text-ink">Themes</p>
                   <p class="mt-1 mb-0 text-[11.5px] leading-relaxed text-faint">Choose an accent palette for the workbench.</p>
                 </div>
-                <div class="flex items-center gap-2">
-                  <button class="rounded-md border border-line px-2 py-1 text-[10.5px] text-muted transition-colors hover:bg-elev hover:text-ink" type="button" onclick={() => importInput?.click()}>Import theme</button>
-                  <input bind:this={importInput} class="visually-hidden" type="file" accept="application/json,.json" aria-label="Import theme JSON" onchange={importTheme} />
-                </div>
               </div>
-              {#if importError}<p class="mt-2 text-[11px] text-danger" role="alert">{importError}</p>{/if}
               <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {#each allColorThemes as option (option.value)}
-                  <div class="relative min-w-0">
-                    <button
-                      type="button"
-                      aria-pressed={colorTheme === option.value}
-                      aria-label="Use {option.label} theme"
-                      class="group flex min-h-[92px] w-full items-center justify-between gap-2 rounded-lg border px-3 py-2.5 pr-9 text-left transition-colors duration-150 {colorTheme === option.value ? 'border-accent bg-elev' : 'border-line hover:border-line-strong hover:bg-elev'}"
-                      onclick={() => onColorTheme(option.value)}
-                    >
-                      <span class="truncate text-[12px] font-medium {colorTheme === option.value ? 'text-ink' : 'text-muted'}">{option.label}</span>
-                      <span class="flex shrink-0 items-center -space-x-2" aria-hidden="true">
-                        <span class="size-8 rounded-full border-2 border-panel shadow-sm" style="background: radial-gradient(circle at 32% 26%, {option.primary}, color-mix(in srgb, {option.primary} 70%, #000))"></span>
-                        <span class="size-8 rounded-full border-2 border-panel shadow-sm" style="background: radial-gradient(circle at 32% 26%, {option.secondary}, color-mix(in srgb, {option.secondary} 68%, #000))"></span>
-                      </span>
-                    </button>
-                    <button
-                      class="absolute right-1.5 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded text-faint transition-colors hover:bg-hover hover:text-ink focus-visible:text-ink"
-                      type="button"
-                      aria-label="{copiedTheme === option.value ? 'Copied' : `Copy ${option.label} theme JSON`}"
-                      title={copiedTheme === option.value ? "Copied" : "Copy theme JSON"}
-                      onclick={() => void copyTheme(option)}
-                    ><Icon name={copiedTheme === option.value ? "check" : "copy"} size={13} /></button>
-                  </div>
+                {#each colorThemes as option (option.value)}
+                  <button
+                    type="button"
+                    aria-pressed={colorTheme === option.value}
+                    aria-label="Use {option.label} theme"
+                    class="group flex min-h-[92px] w-full items-center justify-between gap-2 rounded-lg border px-3 py-2.5 text-left transition-colors duration-150 {colorTheme === option.value ? 'border-accent bg-elev' : 'border-line hover:border-line-strong hover:bg-elev'}"
+                    onclick={() => onColorTheme(option.value)}
+                  >
+                    <span class="truncate text-[12px] font-medium {colorTheme === option.value ? 'text-ink' : 'text-muted'}">{option.label}</span>
+                    <span class="flex shrink-0 items-center -space-x-2" aria-hidden="true">
+                      <span class="size-8 rounded-full border-2 border-panel shadow-sm" style:background={option.gradient ?? `radial-gradient(circle at 32% 26%, ${option.primary}, color-mix(in srgb, ${option.primary} 70%, #000))`}></span>
+                      <span class="size-8 rounded-full border-2 border-panel shadow-sm" style="background: radial-gradient(circle at 32% 26%, {option.secondary}, color-mix(in srgb, {option.secondary} 68%, #000))"></span>
+                    </span>
+                  </button>
                 {/each}
               </div>
             </section>
